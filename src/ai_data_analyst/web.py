@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import shutil
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -11,6 +13,8 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from flask import Flask, abort, render_template, request, send_from_directory, session, url_for
+from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from ai_data_analyst.config import AnalysisConfig
 from ai_data_analyst.exceptions import AnalysisError
@@ -21,6 +25,8 @@ WEB_MIN_CATEGORIES = 1
 WEB_MAX_CATEGORIES = 50
 WEB_DEFAULT_CATEGORIES = 10
 WEB_MAX_CATEGORIES_DIGITS = 12
+DEFAULT_WEB_MAX_UPLOAD_MB = 20
+DEFAULT_WEB_RETENTION_HOURS = 24
 
 
 @dataclass(slots=True)
@@ -37,11 +43,33 @@ def create_app() -> Flask:
         __name__,
         template_folder=str(Path(__file__).resolve().parent / "templates"),
     )
-    app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
+    max_upload_mb = _env_int("AI_ANALYST_MAX_UPLOAD_MB", DEFAULT_WEB_MAX_UPLOAD_MB, minimum=1)
+    retention_hours = _env_int("AI_ANALYST_RETENTION_HOURS", DEFAULT_WEB_RETENTION_HOURS, minimum=0)
+    app.config["MAX_CONTENT_LENGTH"] = max_upload_mb * 1024 * 1024
     app.config["SECRET_KEY"] = os.getenv("AI_ANALYST_SECRET_KEY", "dev-only-secret")
     app.config["WEB_REPORTS_DIR"] = Path(
         os.getenv("AI_ANALYST_WEB_REPORTS_DIR", PROJECT_ROOT / "reports" / "web")
     ).expanduser().resolve()
+    app.config["WEB_MAX_UPLOAD_MB"] = max_upload_mb
+    app.config["WEB_RETENTION_HOURS"] = retention_hours
+    app.config["WEB_ALLOW_LLM"] = _env_bool("AI_ANALYST_WEB_ALLOW_LLM", default=False)
+    if _env_bool("AI_ANALYST_TRUST_PROXY", default=False):
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+
+    @app.before_request
+    def cleanup_expired_runs() -> None:
+        if request.endpoint == "healthz":
+            return
+        _cleanup_expired_runs(app)
+
+    @app.get("/healthz")
+    def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def upload_too_large(_exc: RequestEntityTooLarge):
+        limit = app.config["WEB_MAX_UPLOAD_MB"]
+        return _render_index(error=f"CSV 文件过大。最大 {limit}MB。"), 413
 
     @app.get("/")
     def index() -> str:
@@ -53,7 +81,7 @@ def create_app() -> Flask:
             return _render_index(error="Invalid request origin or CSRF token."), 400
 
         uploaded = request.files.get("csv_file")
-        form = _parse_analyze_form()
+        form = _parse_analyze_form(app)
 
         if form.csv_text and uploaded and uploaded.filename:
             return _render_index(error="Please provide either a CSV file or pasted CSV text, not both."), 400
@@ -101,6 +129,8 @@ def create_app() -> Flask:
 
     @app.get("/runs/<run_id>/<path:filename>")
     def artifact(run_id: str, filename: str) -> Any:
+        if not _is_valid_run_id(run_id):
+            abort(404)
         run_dir = _run_dir(app, run_id)
         if not run_dir.exists() or not _is_allowed_artifact(filename):
             abort(404)
@@ -165,17 +195,31 @@ def _render_index(
         error=error,
         defaults=defaults or _defaults(),
         csrf_token=_csrf_token(),
+        settings=_web_settings(),
     )
 
 
-def _parse_analyze_form() -> AnalyzeForm:
+def _parse_analyze_form(app: Flask) -> AnalyzeForm:
+    requested_llm = request.form.get("use_llm") == "on"
     return AnalyzeForm(
         target=_clean_text(request.form.get("target")),
-        use_llm=request.form.get("use_llm") == "on",
+        use_llm=requested_llm and bool(app.config["WEB_ALLOW_LLM"]),
         report_format=_clean_text(request.form.get("report_format")) or "both",
         max_categories=web_max_categories(request.form.get("max_categories")),
         csv_text=_clean_text(request.form.get("csv_text")),
     )
+
+
+def _web_settings() -> dict[str, Any]:
+    from flask import current_app
+
+    retention_hours = int(current_app.config.get("WEB_RETENTION_HOURS", DEFAULT_WEB_RETENTION_HOURS))
+    return {
+        "allow_llm": bool(current_app.config.get("WEB_ALLOW_LLM", True)),
+        "max_upload_mb": int(current_app.config.get("WEB_MAX_UPLOAD_MB", DEFAULT_WEB_MAX_UPLOAD_MB)),
+        "retention_hours": retention_hours,
+        "retention_label": _retention_label(retention_hours),
+    }
 
 
 def _analysis_error_response(exc: Exception):
@@ -215,6 +259,31 @@ def _int_or_default(value: str | None, default: int) -> int:
         return default
 
 
+def _env_int(name: str, default: int, minimum: int | None = None) -> int:
+    value = _int_or_default(os.getenv(name), default)
+    if minimum is not None:
+        value = max(value, minimum)
+    return value
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _retention_label(hours: int) -> str:
+    if hours <= 0:
+        return "本地报告不自动清理"
+    if hours % 24 == 0:
+        days = hours // 24
+        if days == 1:
+            return "报告临时保留 24 小时"
+        return f"报告临时保留 {days} 天"
+    return f"报告临时保留 {hours} 小时"
+
+
 def web_max_categories(value: str | None) -> int:
     cleaned = _clean_text(value)
     if cleaned.startswith("-"):
@@ -230,6 +299,29 @@ def web_max_categories(value: str | None) -> int:
 
 def _run_dir(app: Flask, run_id: str) -> Path:
     return Path(app.config["WEB_REPORTS_DIR"]) / run_id
+
+
+def _is_valid_run_id(run_id: str) -> bool:
+    return len(run_id) == 12 and all(char in "0123456789abcdef" for char in run_id)
+
+
+def _cleanup_expired_runs(app: Flask) -> None:
+    retention_hours = int(app.config.get("WEB_RETENTION_HOURS", DEFAULT_WEB_RETENTION_HOURS))
+    if retention_hours <= 0:
+        return
+    reports_dir = Path(app.config["WEB_REPORTS_DIR"])
+    if not reports_dir.exists():
+        return
+
+    cutoff = time.time() - (retention_hours * 60 * 60)
+    for child in reports_dir.iterdir():
+        try:
+            if child.is_symlink() or not child.is_dir() or not _is_valid_run_id(child.name):
+                continue
+            if child.stat().st_mtime < cutoff:
+                shutil.rmtree(child)
+        except OSError:
+            continue
 
 
 def _artifact_url(app: Flask, run_id: str, output_dir: Path, path: Path) -> str:

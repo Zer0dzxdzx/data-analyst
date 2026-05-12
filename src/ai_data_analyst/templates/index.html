@@ -315,6 +315,12 @@
       background: var(--teal-dark);
       cursor: wait;
     }
+    .toggle-line.disabled {
+      color: var(--muted);
+    }
+    .toggle-line.disabled input {
+      cursor: not-allowed;
+    }
     .button.secondary {
       background: white;
       color: var(--teal-dark);
@@ -571,9 +577,14 @@
         </div>
       </div>
       <div class="status-row">
-        <span class="pill positive"><span class="dot"></span>默认离线</span>
-        <span class="pill info">LLM 按需启用</span>
-        <span class="pill warn">本地报告</span>
+        {% if settings.allow_llm %}
+          <span class="pill positive"><span class="dot"></span>默认离线</span>
+          <span class="pill info">LLM 按需启用</span>
+        {% else %}
+          <span class="pill positive"><span class="dot"></span>公网离线模式</span>
+          <span class="pill info">LLM 不可用</span>
+        {% endif %}
+        <span class="pill warn">{{ settings.retention_label }}</span>
       </div>
     </div>
   </header>
@@ -583,7 +594,7 @@
       <div class="workspace-title">
         <div class="eyebrow">Local Analysis Console</div>
         <h2>把 CSV 变成可读结论、关键指标和报告</h2>
-        <p class="muted">所有基础分析在本地完成；启用 LLM 时也只发送字段画像与聚合统计。</p>
+        <p class="muted">所有基础分析在服务器临时环境中完成；启用 LLM 时也只发送字段画像与聚合统计。</p>
       </div>
       <div class="quick-stats" aria-label="工作流状态">
         <div class="quick-stat">
@@ -622,7 +633,7 @@
               <div class="choice-box" id="file-choice">
                 <div class="input-heading">
                   <label for="csv_file">上传 CSV 文件</label>
-                  <span class="source-badge">本地文件</span>
+                  <span class="source-badge">最大 {{ settings.max_upload_mb }}MB</span>
                 </div>
                 <input id="csv_file" name="csv_file" type="file" accept=".csv,text/csv">
               </div>
@@ -657,15 +668,26 @@
                   <option value="html" {% if defaults.last_report_format == 'html' %}selected{% endif %}>HTML</option>
                 </select>
               </div>
-              <label class="toggle-line">
-                <input type="checkbox" name="use_llm" {% if defaults.last_use_llm %}checked{% endif %}>
-                启用 LLM 洞察
-              </label>
+              {% if settings.allow_llm %}
+                <label class="toggle-line">
+                  <input type="checkbox" name="use_llm" {% if defaults.last_use_llm %}checked{% endif %}>
+                  启用 LLM 洞察
+                </label>
+              {% else %}
+                <label class="toggle-line disabled" title="公网版本默认关闭外部模型调用">
+                  <input type="checkbox" disabled>
+                  公网离线模式
+                </label>
+              {% endif %}
             </div>
 
             <div class="actions">
               <button type="submit">开始分析</button>
-              <span class="muted">默认不会请求外部 API。</span>
+              {% if settings.allow_llm %}
+                <span class="muted">默认不会请求外部 API。</span>
+              {% else %}
+                <span class="muted">公开试用版不调用外部 LLM。</span>
+              {% endif %}
             </div>
           </form>
         </div>
@@ -717,6 +739,7 @@
                 <div>
                   <h2>报告下载</h2>
                   <p class="muted path-text">运行编号：{{ result.output_label }}</p>
+                  <p class="muted path-text">{{ settings.retention_label }}，请及时下载需要的文件。</p>
                 </div>
               </div>
               <div class="download-row">
@@ -752,7 +775,11 @@
                 <div class="privacy-icon">✓</div>
                 <div>
                   <h3>隐私保护</h3>
-                  <p class="muted">默认离线分析；启用 LLM 时仅发送字段画像与聚合统计。</p>
+                  {% if settings.allow_llm %}
+                    <p class="muted">默认离线分析；启用 LLM 时仅发送字段画像与聚合统计。</p>
+                  {% else %}
+                    <p class="muted">公网试用默认离线，不会调用外部 LLM；报告仅临时保留。</p>
+                  {% endif %}
                 </div>
               </div>
               <div class="empty-visual" aria-hidden="true">
@@ -781,7 +808,7 @@
                   <div class="step-index">1</div>
                   <div>
                     <h3>导入数据</h3>
-                    <p class="muted">上传 CSV 文件，或直接粘贴少量 CSV 内容。</p>
+                    <p class="muted">上传最大 {{ settings.max_upload_mb }}MB 的 CSV 文件，或直接粘贴少量 CSV 内容。</p>
                   </div>
                 </div>
                 <div class="step">

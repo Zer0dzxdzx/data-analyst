@@ -51,6 +51,36 @@ ai-data-analyst-web
 打开浏览器访问 `http://127.0.0.1:8000`，上传 CSV 就能分析。
 网页会在本地会话里保存一个简单的 CSRF token，并默认只接受本机来源请求。
 
+## 部署到 Render
+
+仓库内已包含 `render.yaml`，可以在 Render 创建 Web Service 并连接 GitHub 仓库后自动部署。公网版本默认使用离线分析：
+
+- 上传上限：10MB
+- 报告目录：`/tmp/ai-data-analyst-reports`
+- 临时保留：24 小时
+- LLM：默认关闭，不配置 `LLM_API_KEY`
+
+Render 启动命令：
+
+```bash
+gunicorn 'ai_data_analyst.web:create_app()' --bind 0.0.0.0:$PORT --workers 1 --timeout 180
+```
+
+如果不使用 `render.yaml` 自动创建服务，请手动配置这些环境变量，保证公网行为一致：
+
+```bash
+AI_ANALYST_WEB_REPORTS_DIR=/tmp/ai-data-analyst-reports
+AI_ANALYST_MAX_UPLOAD_MB=10
+AI_ANALYST_RETENTION_HOURS=24
+AI_ANALYST_WEB_ALLOW_LLM=0
+AI_ANALYST_TRUST_PROXY=1
+MPLBACKEND=Agg
+```
+
+`AI_ANALYST_TRUST_PROXY=1` 只应在 Render 这类可信反向代理后开启，用于正确识别公网 HTTPS Origin。
+
+部署后可用 `examples/dashboard_test_sales.csv` 在线验收，目标列填写 `revenue`。
+
 输出文件：
 
 - `reports/sales_sample-<hash>/report.md`

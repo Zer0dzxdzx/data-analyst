@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: data-analyst
+    runtime: python
+    plan: free
+    buildCommand: python -m pip install -e .
+    startCommand: gunicorn 'ai_data_analyst.web:create_app()' --bind 0.0.0.0:$PORT --workers 1 --timeout 180
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: MPLBACKEND
+        value: Agg
+      - key: AI_ANALYST_SECRET_KEY
+        generateValue: true
+      - key: AI_ANALYST_WEB_REPORTS_DIR
+        value: /tmp/ai-data-analyst-reports
+      - key: AI_ANALYST_MAX_UPLOAD_MB
+        value: "10"
+      - key: AI_ANALYST_RETENTION_HOURS
+        value: "24"
+      - key: AI_ANALYST_WEB_ALLOW_LLM
+        value: "0"
+      - key: AI_ANALYST_TRUST_PROXY
+        value: "1"

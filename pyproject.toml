@@ -13,6 +13,7 @@ dependencies = [
   "matplotlib>=3.8",
   "httpx>=0.25",
   "flask>=3.0",
+  "gunicorn>=21.2",
 ]
 
 [project.optional-dependencies]
