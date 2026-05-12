@@ -93,9 +93,9 @@ def create_app() -> Flask:
                 ),
             )
         except AnalysisError as exc:
-            return render_template("index.html", result=None, error=str(exc), defaults=_defaults(), csrf_token=_csrf_token()), 400
+            return _analysis_error_response(exc)
         except ValueError as exc:
-            return render_template("index.html", result=None, error=str(exc), defaults=_defaults(), csrf_token=_csrf_token()), 400
+            return _analysis_error_response(exc)
 
         preview = _build_preview(app, run_id, result)
         return render_template(
@@ -164,6 +164,33 @@ def _defaults() -> dict[str, Any]:
         "last_report_format": "both",
         "last_use_llm": False,
     }
+
+
+def _analysis_error_response(exc: Exception):
+    return render_template(
+        "index.html",
+        result=None,
+        error=_public_error_message(exc),
+        defaults=_defaults(),
+        csrf_token=_csrf_token(),
+    ), 400
+
+
+def _public_error_message(exc: Exception) -> str:
+    message = str(exc)
+    if "Target column not found" in message:
+        return message
+    if "empty" in message.lower():
+        return "CSV file is empty."
+    if "parser error" in message.lower():
+        return "CSV parser error. Please check the file format."
+    if "could not decode" in message.lower():
+        return "Could not decode CSV. Please save it as UTF-8 or UTF-8-SIG and try again."
+    if "no columns" in message.lower():
+        return "CSV has no columns."
+    if "no data rows" in message.lower():
+        return "CSV has columns but no data rows."
+    return "Could not analyze the CSV. Please check the file and try again."
 
 
 def _safe_filename(name: str) -> str:

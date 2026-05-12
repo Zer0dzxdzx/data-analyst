@@ -149,6 +149,29 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Invalid request origin or CSRF token", response.get_data(as_text=True))
 
+    def test_analysis_errors_do_not_expose_server_paths(self):
+        app = create_app()
+        client = app.test_client()
+
+        with client.session_transaction() as session:
+            session["ai_analyst_csrf"] = "token-empty-csv"
+
+        response = client.post(
+            "/analyze",
+            data={
+                "csrf_token": "token-empty-csv",
+                "csv_file": (BytesIO(b""), "empty.csv"),
+            },
+            headers={"Origin": "http://localhost"},
+            content_type="multipart/form-data",
+        )
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("CSV file is empty.", body)
+        self.assertNotIn(str(ROOT), body)
+        self.assertNotIn("reports/web", body)
+
     def test_analyze_rejects_both_file_and_text(self):
         app = create_app()
         client = app.test_client()

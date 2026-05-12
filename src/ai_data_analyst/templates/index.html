@@ -6,43 +6,53 @@
   <title>AI 数据分析助手</title>
   <style>
     :root {
-      --bg: #f5f7fb;
+      --bg: #f4f6f8;
+      --bg-grid: rgba(15, 23, 42, 0.035);
       --panel: #ffffff;
-      --panel-soft: #f8fafc;
-      --line: #d9e2ec;
-      --text: #102a43;
-      --muted: #627d98;
-      --blue: #1d4ed8;
-      --blue-dark: #1e40af;
-      --cyan: #0e7490;
-      --cyan-soft: #e0f2fe;
+      --panel-soft: #f9fafb;
+      --line: #d6dde6;
+      --text: #111827;
+      --muted: #617084;
+      --teal: #0f766e;
+      --teal-dark: #115e59;
+      --teal-soft: #e6fffb;
+      --amber: #b45309;
+      --amber-soft: #fffbeb;
       --green: #047857;
       --green-soft: #ecfdf5;
       --red: #b42318;
-      --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+      --red-soft: #fff1f0;
+      --shadow: 0 18px 45px rgba(31, 41, 55, 0.08);
+      --shadow-tight: 0 8px 18px rgba(31, 41, 55, 0.06);
     }
 
     * { box-sizing: border-box; }
+    html { min-width: 320px; }
     body {
       margin: 0;
-      background: var(--bg);
+      min-height: 100vh;
+      background:
+        linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px) 0 0 / 24px 24px,
+        linear-gradient(0deg, var(--bg-grid) 1px, transparent 1px) 0 0 / 24px 24px,
+        linear-gradient(180deg, #ffffff 0, var(--bg) 260px, #eef2f7 100%);
       color: var(--text);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: "Avenir Next", "DIN Alternate", "PingFang SC", "Microsoft YaHei", sans-serif;
       letter-spacing: 0;
     }
-    a { color: var(--blue); text-decoration: none; }
+    a { color: var(--teal); text-decoration: none; }
     a:hover { text-decoration: underline; }
     .topbar {
-      background: rgba(255, 255, 255, 0.96);
+      background: rgba(255, 255, 255, 0.92);
       border-bottom: 1px solid var(--line);
       position: sticky;
       top: 0;
       z-index: 10;
+      backdrop-filter: blur(16px);
     }
     .topbar-inner {
-      max-width: 1180px;
+      max-width: 1240px;
       margin: 0 auto;
-      padding: 14px 20px;
+      padding: 12px 20px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -51,24 +61,36 @@
     .brand {
       display: flex;
       align-items: center;
-      gap: 12px;
+      gap: 11px;
       min-width: 0;
     }
     .brand-mark {
-      width: 36px;
-      height: 36px;
+      width: 38px;
+      height: 38px;
       border-radius: 8px;
-      background: linear-gradient(135deg, var(--blue), var(--cyan));
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.16), transparent),
+        #102a43;
       color: white;
       display: grid;
       place-items: center;
       font-weight: 800;
+      font-size: 13px;
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12), var(--shadow-tight);
     }
     h1, h2, h3, p { margin: 0; }
-    h1 { font-size: 18px; line-height: 1.25; }
-    h2 { font-size: 17px; margin-bottom: 14px; }
-    h3 { font-size: 14px; margin-bottom: 8px; }
+    h1 { font-size: 18px; line-height: 1.2; font-weight: 800; }
+    h2 { font-size: 16px; margin-bottom: 12px; font-weight: 800; }
+    h3 { font-size: 13px; margin-bottom: 6px; font-weight: 800; }
     .muted { color: var(--muted); }
+    .eyebrow {
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
     .status-row {
       display: flex;
       flex-wrap: wrap;
@@ -81,11 +103,19 @@
       gap: 6px;
       border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 6px 10px;
+      padding: 5px 9px;
       background: var(--panel-soft);
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
+      font-weight: 750;
       white-space: nowrap;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 3px rgba(4, 120, 87, 0.1);
     }
     .pill.positive {
       background: var(--green-soft);
@@ -93,19 +123,61 @@
       color: var(--green);
     }
     .pill.info {
-      background: #eff6ff;
-      border-color: #bfdbfe;
-      color: var(--blue);
+      background: var(--teal-soft);
+      border-color: #99f6e4;
+      color: var(--teal-dark);
+    }
+    .pill.warn {
+      background: var(--amber-soft);
+      border-color: #fde68a;
+      color: var(--amber);
     }
     .page {
-      max-width: 1180px;
+      max-width: 1240px;
       margin: 0 auto;
-      padding: 22px 20px 42px;
+      padding: 20px 20px 44px;
+    }
+    .workspace-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 18px;
+      align-items: end;
+      margin-bottom: 18px;
+    }
+    .workspace-title {
+      max-width: 720px;
+    }
+    .workspace-title h2 {
+      font-size: 24px;
+      line-height: 1.15;
+      margin-bottom: 7px;
+    }
+    .quick-stats {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(90px, 1fr));
+      gap: 8px;
+      min-width: 340px;
+    }
+    .quick-stat {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.82);
+      padding: 10px 11px;
+      box-shadow: var(--shadow-tight);
+    }
+    .quick-stat strong {
+      display: block;
+      font-size: 17px;
+      line-height: 1.1;
+    }
+    .quick-stat span {
+      color: var(--muted);
+      font-size: 12px;
     }
     .layout {
       display: grid;
-      grid-template-columns: minmax(320px, 420px) 1fr;
-      gap: 18px;
+      grid-template-columns: minmax(330px, 430px) 1fr;
+      gap: 20px;
       align-items: start;
     }
     .panel {
@@ -114,15 +186,17 @@
       border-radius: 8px;
       box-shadow: var(--shadow);
     }
-    .panel-body { padding: 18px; }
-    .form-panel { position: sticky; top: 78px; }
+    .panel-body { padding: 18px; position: relative; }
+    .form-panel { position: sticky; top: 76px; }
+    .form-panel .panel-body { padding: 18px 18px 16px; }
     .section-title {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      margin-bottom: 14px;
+      margin-bottom: 16px;
     }
+    .section-title p { line-height: 1.45; }
     .field { margin-top: 14px; }
     label {
       display: block;
@@ -140,7 +214,7 @@
     .input-heading label { margin: 0; }
     .source-badge {
       border-radius: 999px;
-      background: white;
+      background: rgba(255, 255, 255, 0.9);
       border: 1px solid var(--line);
       color: var(--muted);
       font-size: 12px;
@@ -156,16 +230,23 @@
       color: var(--text);
       padding: 10px 12px;
       font: inherit;
+      min-height: 40px;
+      transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
     }
     textarea {
       resize: vertical;
-      min-height: 130px;
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      min-height: 138px;
+      font-family: "SF Mono", "Cascadia Mono", Menlo, monospace;
       font-size: 13px;
+      line-height: 1.55;
     }
     input:focus, textarea:focus, select:focus {
-      outline: 2px solid rgba(29, 78, 216, 0.16);
-      border-color: var(--blue);
+      border-color: var(--teal);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+    }
+    input:focus-visible, textarea:focus-visible, select:focus-visible, button:focus-visible, .button:focus-visible {
+      outline: 2px solid var(--teal-dark);
+      outline-offset: 2px;
     }
     .input-choice {
       display: grid;
@@ -174,14 +255,14 @@
     .choice-box {
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 13px;
+      padding: 14px;
       background: var(--panel-soft);
       transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
     }
     .choice-box.active {
-      border-color: #7dd3fc;
-      background: #f0f9ff;
-      box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.08);
+      border-color: #5eead4;
+      background: var(--teal-soft);
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
     }
     .row {
       display: grid;
@@ -197,6 +278,11 @@
       color: var(--text);
       font-weight: 650;
     }
+    .toggle-line input {
+      accent-color: var(--teal);
+      width: 16px;
+      height: 16px;
+    }
     .actions {
       margin-top: 18px;
       display: flex;
@@ -211,30 +297,34 @@
       gap: 8px;
       border: 0;
       border-radius: 8px;
-      background: var(--blue);
+      background: var(--teal);
       color: white;
-      padding: 10px 14px;
+      padding: 10px 15px;
       font-weight: 700;
       cursor: pointer;
       min-height: 40px;
+      box-shadow: 0 8px 18px rgba(15, 118, 110, 0.18);
+      transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
     }
     button:hover, .button:hover {
-      background: var(--blue-dark);
+      background: var(--teal-dark);
+      transform: translateY(-1px);
       text-decoration: none;
     }
     button[aria-busy="true"] {
-      background: var(--blue-dark);
+      background: var(--teal-dark);
       cursor: wait;
     }
     .button.secondary {
       background: white;
-      color: var(--blue);
+      color: var(--teal-dark);
       border: 1px solid var(--line);
+      box-shadow: none;
     }
-    .button.secondary:hover { background: #eff6ff; }
+    .button.secondary:hover { background: var(--teal-soft); }
     .error {
       border: 1px solid #f5c2c7;
-      background: #fff1f0;
+      background: var(--red-soft);
       color: var(--red);
       padding: 12px 14px;
       border-radius: 8px;
@@ -245,8 +335,8 @@
       grid-template-columns: 34px 1fr;
       gap: 10px;
       align-items: start;
-      border: 1px solid #bfdbfe;
-      background: #eff6ff;
+      border: 1px solid #99f6e4;
+      background: var(--teal-soft);
       border-radius: 8px;
       padding: 12px;
     }
@@ -255,16 +345,61 @@
       height: 34px;
       border-radius: 8px;
       background: white;
-      color: var(--blue);
+      color: var(--teal);
       display: grid;
       place-items: center;
       font-weight: 800;
     }
     .empty-state {
-      min-height: 360px;
+      min-height: 510px;
       display: grid;
-      align-content: center;
-      gap: 16px;
+      align-content: start;
+      gap: 14px;
+    }
+    .empty-visual {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(90deg, rgba(15, 118, 110, 0.08) 1px, transparent 1px) 0 0 / 28px 28px,
+        linear-gradient(0deg, rgba(15, 118, 110, 0.08) 1px, transparent 1px) 0 0 / 28px 28px,
+        #ffffff;
+      padding: 14px;
+      min-height: 172px;
+      display: grid;
+      gap: 10px;
+    }
+    .flow-line {
+      display: grid;
+      grid-template-columns: 76px 1fr 52px;
+      gap: 10px;
+      align-items: center;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.82);
+    }
+    .flow-label {
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 800;
+    }
+    .flow-track {
+      height: 7px;
+      border-radius: 999px;
+      background: #e5e7eb;
+      overflow: hidden;
+    }
+    .flow-track span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, var(--teal), #14b8a6);
+    }
+    .flow-count {
+      color: var(--text);
+      font-size: 12px;
+      font-weight: 800;
+      text-align: right;
     }
     .steps {
       display: grid;
@@ -278,14 +413,14 @@
       padding: 12px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: var(--panel-soft);
+      background: rgba(255, 255, 255, 0.72);
     }
     .step-index {
       width: 32px;
       height: 32px;
       border-radius: 8px;
-      background: var(--cyan-soft);
-      color: var(--cyan);
+      background: var(--amber-soft);
+      color: var(--amber);
       display: grid;
       place-items: center;
       font-weight: 800;
@@ -300,14 +435,14 @@
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 12px;
-      margin-bottom: 18px;
     }
     .metric {
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 14px;
+      padding: 14px 14px 13px;
       min-width: 0;
+      box-shadow: var(--shadow-tight);
     }
     .metric-label {
       color: var(--muted);
@@ -319,9 +454,18 @@
       font-weight: 800;
       overflow-wrap: anywhere;
     }
+    .metric-accent {
+      width: 28px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--teal);
+      margin-top: 10px;
+    }
     .insight {
-      border-left: 4px solid var(--cyan);
-      background: #f0f9ff;
+      border-left: 4px solid var(--teal);
+      background:
+        linear-gradient(135deg, rgba(15, 118, 110, 0.08), transparent 42%),
+        #ffffff;
     }
     .insight h2 {
       display: flex;
@@ -334,8 +478,8 @@
       align-items: center;
       border-radius: 999px;
       background: white;
-      border: 1px solid #bae6fd;
-      color: var(--cyan);
+      border: 1px solid #99f6e4;
+      color: var(--teal-dark);
       font-size: 12px;
       font-weight: 800;
       padding: 5px 8px;
@@ -348,6 +492,12 @@
       font: inherit;
       line-height: 1.65;
       color: var(--text);
+    }
+    .result-tools {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 14px;
+      align-items: center;
     }
     .download-row {
       display: flex;
@@ -365,6 +515,7 @@
       border-radius: 8px;
       background: white;
       overflow: hidden;
+      box-shadow: var(--shadow-tight);
     }
     img {
       width: 100%;
@@ -377,6 +528,8 @@
       border-top: 1px solid var(--line);
       font-size: 13px;
       color: var(--muted);
+      font-weight: 700;
+      overflow-wrap: anywhere;
     }
     .path-text {
       overflow-wrap: anywhere;
@@ -387,7 +540,8 @@
       gap: 18px;
     }
     @media (max-width: 980px) {
-      .layout, .metrics, .charts, .row { grid-template-columns: 1fr; }
+      .workspace-header, .layout, .metrics, .charts, .row, .result-tools { grid-template-columns: 1fr; }
+      .quick-stats { min-width: 0; }
       .form-panel { position: static; }
       .topbar-inner { align-items: flex-start; flex-direction: column; }
       .status-row { justify-content: flex-start; }
@@ -399,6 +553,10 @@
       .metric-value { font-size: 20px; }
       button, .button { width: 100%; }
       .download-row { display: grid; grid-template-columns: 1fr; }
+      .quick-stats { grid-template-columns: 1fr; }
+      .workspace-title h2 { font-size: 21px; }
+      .flow-line { grid-template-columns: 1fr; }
+      .flow-count { text-align: left; }
     }
   </style>
 </head>
@@ -413,14 +571,36 @@
         </div>
       </div>
       <div class="status-row">
-        <span class="pill positive">默认离线</span>
+        <span class="pill positive"><span class="dot"></span>默认离线</span>
         <span class="pill info">LLM 按需启用</span>
-        <span class="pill">本地报告</span>
+        <span class="pill warn">本地报告</span>
       </div>
     </div>
   </header>
 
   <main class="page">
+    <section class="workspace-header">
+      <div class="workspace-title">
+        <div class="eyebrow">Local Analysis Console</div>
+        <h2>把 CSV 变成可读结论、关键指标和报告</h2>
+        <p class="muted">所有基础分析在本地完成；启用 LLM 时也只发送字段画像与聚合统计。</p>
+      </div>
+      <div class="quick-stats" aria-label="工作流状态">
+        <div class="quick-stat">
+          <strong>CSV</strong>
+          <span>输入格式</span>
+        </div>
+        <div class="quick-stat">
+          <strong>EDA</strong>
+          <span>自动画像</span>
+        </div>
+        <div class="quick-stat">
+          <strong>MD/HTML</strong>
+          <span>报告输出</span>
+        </div>
+      </div>
+    </section>
+
     {% if error %}
       <div class="error">{{ error }}</div>
     {% endif %}
@@ -430,6 +610,7 @@
         <div class="panel-body">
           <div class="section-title">
             <div>
+              <div class="eyebrow">Input</div>
               <h2>数据输入</h2>
               <p class="muted">上传文件或粘贴 CSV，二选一。</p>
             </div>
@@ -501,18 +682,22 @@
             <div class="metric">
               <div class="metric-label">行数</div>
               <div class="metric-value">{{ result.eda_summary.shape.rows }}</div>
+              <div class="metric-accent"></div>
             </div>
             <div class="metric">
               <div class="metric-label">列数</div>
               <div class="metric-value">{{ result.eda_summary.shape.columns }}</div>
+              <div class="metric-accent"></div>
             </div>
             <div class="metric">
               <div class="metric-label">图表</div>
               <div class="metric-value">{{ result.charts|length }}</div>
+              <div class="metric-accent"></div>
             </div>
             <div class="metric">
               <div class="metric-label">洞察模式</div>
               <div class="metric-value">{{ result.insights.mode }}</div>
+              <div class="metric-accent"></div>
             </div>
           </div>
 
@@ -528,7 +713,7 @@
 
           <section class="panel">
             <div class="panel-body">
-              <div class="section-title">
+              <div class="section-title result-tools">
                 <div>
                   <h2>报告下载</h2>
                   <p class="muted path-text">运行编号：{{ result.output_label }}</p>
@@ -568,6 +753,23 @@
                 <div>
                   <h3>隐私保护</h3>
                   <p class="muted">默认离线分析；启用 LLM 时仅发送字段画像与聚合统计。</p>
+                </div>
+              </div>
+              <div class="empty-visual" aria-hidden="true">
+                <div class="flow-line">
+                  <div class="flow-label">Schema</div>
+                  <div class="flow-track"><span style="width: 76%"></span></div>
+                  <div class="flow-count">Auto</div>
+                </div>
+                <div class="flow-line">
+                  <div class="flow-label">EDA</div>
+                  <div class="flow-track"><span style="width: 88%"></span></div>
+                  <div class="flow-count">Local</div>
+                </div>
+                <div class="flow-line">
+                  <div class="flow-label">Charts</div>
+                  <div class="flow-track"><span style="width: 64%"></span></div>
+                  <div class="flow-count">PNG</div>
                 </div>
               </div>
               <div>
