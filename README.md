@@ -11,7 +11,42 @@
 - LLM 洞察：通过 OpenAI-compatible Chat Completions 输出中文分析结论。
 - 隐私保护：启用 LLM 时只发送 schema 与脱敏聚合统计，不发送原始数据行。
 
-## 安装
+## 首次使用
+
+先安装一次依赖：
+
+```bash
+python3 -m pip install -e .
+```
+
+## 最简单用法
+
+默认离线运行，系统会使用本地模板生成结论，不会发起网络请求：
+
+```bash
+python3 analyze.py
+```
+
+分析自己的 CSV：
+
+```bash
+python3 analyze.py /path/to/your.csv
+```
+
+如果有目标列，例如 `revenue`：
+
+```bash
+python3 analyze.py /path/to/your.csv --target revenue
+```
+
+输出文件：
+
+- `reports/sales_sample-<hash>/report.md`
+- `reports/sales_sample-<hash>/report.html`
+- `reports/sales_sample-<hash>/summary.json`
+- `reports/sales_sample-<hash>/figures/*.png`
+
+## 可选：使用虚拟环境
 
 ```bash
 python3 -m venv .venv
@@ -19,26 +54,11 @@ source .venv/bin/activate
 python -m pip install -e .
 ```
 
-## 快速开始
-
-默认离线运行，系统会使用本地模板生成结论，不会发起网络请求：
+安装后也可以使用完整 CLI：
 
 ```bash
 ai-data-analyst analyze examples/sales_sample.csv --out reports/sales_demo --target revenue
 ```
-
-或直接用模块方式运行：
-
-```bash
-PYTHONPATH=src python3 -m ai_data_analyst analyze examples/sales_sample.csv --out reports/sales_demo --target revenue
-```
-
-输出文件：
-
-- `reports/sales_demo/report.md`
-- `reports/sales_demo/report.html`
-- `reports/sales_demo/summary.json`
-- `reports/sales_demo/figures/*.png`
 
 ## LLM 配置
 
@@ -48,7 +68,7 @@ PYTHONPATH=src python3 -m ai_data_analyst analyze examples/sales_sample.csv --ou
 export LLM_API_KEY="your-api-key"
 export LLM_BASE_URL="https://api.openai.com/v1"
 export LLM_MODEL="gpt-4o-mini"
-ai-data-analyst analyze examples/sales_sample.csv --out reports/sales_demo --target revenue --llm
+python3 analyze.py /path/to/your.csv --target revenue --llm
 ```
 
 `LLM_BASE_URL` 可以是 API 根路径，也可以直接是 `/chat/completions` 端点。
