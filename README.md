@@ -111,5 +111,7 @@ PYTHONPATH=src python3 -m unittest discover -s tests
 如果安装了开发依赖，也可以使用：
 
 ```bash
+python3 -m pip install -e ".[dev]"
 pytest
+python3 -m ruff check .
 ```

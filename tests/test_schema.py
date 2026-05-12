@@ -31,6 +31,16 @@ class SchemaInferenceTests(unittest.TestCase):
         series = pd.Series([None, None], name="empty")
         self.assertEqual(infer_column_type(series), "unknown")
 
+    def test_profiles_empty_dataframe_columns_without_rows(self):
+        frame = pd.DataFrame({"empty_numeric": pd.Series(dtype="float64"), "empty_text": pd.Series(dtype="object")})
+
+        profiles = profile_dataframe(frame)
+
+        self.assertEqual([profile.name for profile in profiles], ["empty_numeric", "empty_text"])
+        self.assertTrue(all(profile.inferred_type == "unknown" for profile in profiles))
+        self.assertTrue(all(profile.missing_rate == 0 for profile in profiles))
+        self.assertTrue(all(profile.unique_rate == 0 for profile in profiles))
+
     def test_numeric_text_with_currency_and_thousands(self):
         series = pd.Series(["$1,200", "$2,500", "$3,750"], name="revenue")
 

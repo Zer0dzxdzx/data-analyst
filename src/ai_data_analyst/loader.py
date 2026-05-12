@@ -8,7 +8,6 @@ import pandas as pd
 
 from ai_data_analyst.exceptions import DataLoadError
 
-
 DEFAULT_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "latin1")
 
 

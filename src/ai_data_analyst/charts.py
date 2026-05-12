@@ -88,7 +88,9 @@ def _numeric_histograms(
         )
     skipped = len(numeric_profiles) - max_numeric_charts
     if skipped > 0:
-        charts.append(_skipped_chart("numeric_distribution", f"Skipped {skipped} numeric histograms due to chart limit."))
+        charts.append(
+            _skipped_chart("numeric_distribution", f"Skipped {skipped} numeric histograms due to chart limit.")
+        )
     return charts
 
 
@@ -124,7 +126,9 @@ def _categorical_bars(
         )
     skipped = len(categorical_profiles) - max_categorical_charts
     if skipped > 0:
-        charts.append(_skipped_chart("categorical_top", f"Skipped {skipped} categorical bar charts due to chart limit."))
+        charts.append(
+            _skipped_chart("categorical_top", f"Skipped {skipped} categorical bar charts due to chart limit.")
+        )
     return charts
 
 

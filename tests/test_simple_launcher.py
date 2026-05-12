@@ -3,7 +3,6 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("simple_launcher", ROOT / "analyze.py")
 launcher = importlib.util.module_from_spec(SPEC)

@@ -1,10 +1,11 @@
+import re
 import unittest
 from io import BytesIO
 from pathlib import Path
-import re
+from types import SimpleNamespace
+from unittest.mock import patch
 
-from ai_data_analyst.web import create_app
-
+from ai_data_analyst.web import create_app, web_max_categories
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE = ROOT / "examples" / "sales_sample.csv"
@@ -20,6 +21,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("AI 数据分析助手", response.get_data(as_text=True))
         self.assertIn('name="csrf_token"', response.get_data(as_text=True))
+        self.assertIn('name="max_categories" type="number" min="1" max="50"', response.get_data(as_text=True))
 
     def test_analyze_upload_returns_result_page(self):
         app = create_app()
@@ -77,6 +79,91 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("报告下载", body)
         self.assertIn("summary.json", body)
         self.assertNotIn(str(ROOT), body)
+
+    def test_analyze_clamps_large_max_categories_for_web_requests(self):
+        app = create_app()
+        client = app.test_client()
+        captured = {}
+
+        with client.session_transaction() as session:
+            session["ai_analyst_csrf"] = "token-large-max"
+
+        def fake_analyze_csv(csv_path, config):
+            captured["max_categories"] = config.max_categories
+            output_dir = Path(csv_path).parent.parent
+            summary_path = output_dir / "summary.json"
+            summary_path.write_text("{}", encoding="utf-8")
+            report_path = output_dir / "report.md"
+            report_path.write_text("# report", encoding="utf-8")
+            return SimpleNamespace(
+                output_dir=output_dir,
+                summary_path=summary_path,
+                report_paths={"markdown": report_path},
+                charts=[],
+                insights={"mode": "fallback", "content": "ok"},
+                eda_summary={"shape": {"rows": 1, "columns": 2}},
+            )
+
+        with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
+            response = client.post(
+                "/analyze",
+                data={
+                    "csrf_token": "token-large-max",
+                    "csv_text": "a,b\n1,2\n",
+                    "report_format": "markdown",
+                    "max_categories": "999999",
+                },
+                headers={"Origin": "http://localhost"},
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["max_categories"], 50)
+
+    def test_analyze_uses_safe_max_categories_for_low_or_invalid_values(self):
+        app = create_app()
+        client = app.test_client()
+        captured = []
+
+        def fake_analyze_csv(csv_path, config):
+            captured.append(config.max_categories)
+            output_dir = Path(csv_path).parent.parent
+            summary_path = output_dir / "summary.json"
+            summary_path.write_text("{}", encoding="utf-8")
+            report_path = output_dir / "report.md"
+            report_path.write_text("# report", encoding="utf-8")
+            return SimpleNamespace(
+                output_dir=output_dir,
+                summary_path=summary_path,
+                report_paths={"markdown": report_path},
+                charts=[],
+                insights={"mode": "fallback", "content": "ok"},
+                eda_summary={"shape": {"rows": 1, "columns": 2}},
+            )
+
+        with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
+            for token, value in (("token-low-max", "0"), ("token-invalid-max", "many")):
+                with client.session_transaction() as session:
+                    session["ai_analyst_csrf"] = token
+
+                response = client.post(
+                    "/analyze",
+                    data={
+                        "csrf_token": token,
+                        "csv_text": "a,b\n1,2\n",
+                        "report_format": "markdown",
+                        "max_categories": value,
+                    },
+                    headers={"Origin": "http://localhost"},
+                    content_type="multipart/form-data",
+                )
+
+                self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(captured, [1, 10])
+
+    def test_web_max_categories_uses_default_for_extremely_long_numbers(self):
+        self.assertEqual(web_max_categories("9" * 1000), 10)
 
     def test_artifacts_do_not_expose_raw_pasted_csv(self):
         app = create_app()

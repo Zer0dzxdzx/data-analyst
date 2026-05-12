@@ -33,6 +33,36 @@ class EdaSummaryTests(unittest.TestCase):
         self.assertEqual(summary["numeric"]["value"]["mean"], 1.0)
         self.assertEqual(summary["numeric"]["value"]["max"], 1.0)
 
+    def test_all_non_finite_numeric_column_has_null_statistics(self):
+        frame = pd.DataFrame({"value": [float("inf"), float("-inf")]})
+        profiles = profile_dataframe(frame)
+        summary = build_eda_summary(frame, profiles)
+
+        self.assertEqual(
+            summary["numeric"]["value"],
+            {
+                "count": 0.0,
+                "mean": None,
+                "std": None,
+                "min": None,
+                "q25": None,
+                "median": None,
+                "q75": None,
+                "max": None,
+            },
+        )
+
+    def test_empty_dataframe_with_columns_produces_stable_summary(self):
+        frame = pd.DataFrame({"empty_numeric": pd.Series(dtype="float64"), "empty_text": pd.Series(dtype="object")})
+        profiles = profile_dataframe(frame)
+        summary = build_eda_summary(frame, profiles)
+
+        self.assertEqual(summary["shape"], {"rows": 0, "columns": 2})
+        self.assertEqual(summary["missing"]["total_missing_cells"], 0)
+        self.assertEqual(summary["numeric"], {})
+        self.assertEqual(summary["categorical"], {})
+        self.assertEqual(summary["correlation"], {"matrix": {}, "strong_pairs": []})
+
 
 if __name__ == "__main__":
     unittest.main()

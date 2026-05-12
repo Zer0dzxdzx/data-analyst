@@ -2,15 +2,14 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch
 from pathlib import Path
+from unittest.mock import patch
 
 from ai_data_analyst.cli import main
 from ai_data_analyst.config import AnalysisConfig
 from ai_data_analyst.exceptions import DataLoadError
 from ai_data_analyst.loader import load_csv
 from ai_data_analyst.workflow import analyze_csv
-
 
 ROOT = Path(__file__).resolve().parents[1]
 SAMPLE = ROOT / "examples" / "sales_sample.csv"

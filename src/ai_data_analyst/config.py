@@ -21,7 +21,7 @@ class AnalysisConfig:
     max_categorical_charts: int = 12
     max_heatmap_columns: int = 20
 
-    def normalized(self) -> "AnalysisConfig":
+    def normalized(self) -> AnalysisConfig:
         output_dir = Path(self.output_dir).expanduser().resolve()
         report_format = self.report_format.lower().strip()
         if report_format not in {"markdown", "html", "both"}:

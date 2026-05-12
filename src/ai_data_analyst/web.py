@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import os
 import uuid
-from secrets import token_urlsafe
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from secrets import token_urlsafe
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -15,8 +16,20 @@ from ai_data_analyst.config import AnalysisConfig
 from ai_data_analyst.exceptions import AnalysisError
 from ai_data_analyst.workflow import analyze_csv
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+WEB_MIN_CATEGORIES = 1
+WEB_MAX_CATEGORIES = 50
+WEB_DEFAULT_CATEGORIES = 10
+WEB_MAX_CATEGORIES_DIGITS = 12
+
+
+@dataclass(slots=True)
+class AnalyzeForm:
+    target: str
+    use_llm: bool
+    report_format: str
+    max_categories: int
+    csv_text: str
 
 
 def create_app() -> Flask:
@@ -32,51 +45,29 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index() -> str:
-        return render_template("index.html", result=None, error=None, defaults=_defaults(), csrf_token=_csrf_token())
+        return _render_index()
 
     @app.post("/analyze")
     def analyze() -> str:
         if not _check_csrf():
-            return render_template(
-                "index.html",
-                result=None,
-                error="Invalid request origin or CSRF token.",
-                defaults=_defaults(),
-                csrf_token=_csrf_token(),
-            ), 400
+            return _render_index(error="Invalid request origin or CSRF token."), 400
 
         uploaded = request.files.get("csv_file")
-        target = _clean_text(request.form.get("target"))
-        use_llm = request.form.get("use_llm") == "on"
-        report_format = request.form.get("report_format", "both")
-        max_categories = _int_or_default(request.form.get("max_categories"), 10)
-        csv_text = _clean_text(request.form.get("csv_text"))
+        form = _parse_analyze_form()
 
-        if csv_text and uploaded and uploaded.filename:
-            return render_template(
-                "index.html",
-                result=None,
-                error="Please provide either a CSV file or pasted CSV text, not both.",
-                defaults=_defaults(),
-                csrf_token=_csrf_token(),
-            ), 400
+        if form.csv_text and uploaded and uploaded.filename:
+            return _render_index(error="Please provide either a CSV file or pasted CSV text, not both."), 400
 
-        if not csv_text and (not uploaded or not uploaded.filename):
-            return render_template(
-                "index.html",
-                result=None,
-                error="Please choose a CSV file or paste CSV text.",
-                defaults=_defaults(),
-                csrf_token=_csrf_token(),
-            ), 400
+        if not form.csv_text and (not uploaded or not uploaded.filename):
+            return _render_index(error="Please choose a CSV file or paste CSV text."), 400
 
         run_id = uuid.uuid4().hex[:12]
         run_dir = _run_dir(app, run_id)
         input_dir = run_dir / "_inputs"
         input_dir.mkdir(parents=True, exist_ok=True)
-        if csv_text:
+        if form.csv_text:
             csv_path = input_dir / "pasted.csv"
-            csv_path.write_text(csv_text, encoding="utf-8")
+            csv_path.write_text(form.csv_text, encoding="utf-8")
         else:
             csv_path = input_dir / _safe_filename(uploaded.filename or "")
             uploaded.save(csv_path)
@@ -86,10 +77,10 @@ def create_app() -> Flask:
                 csv_path,
                 AnalysisConfig(
                     output_dir=run_dir,
-                    target_column=target or None,
-                    max_categories=max_categories,
-                    use_llm=use_llm,
-                    report_format=report_format,
+                    target_column=form.target or None,
+                    max_categories=form.max_categories,
+                    use_llm=form.use_llm,
+                    report_format=form.report_format,
                 ),
             )
         except AnalysisError as exc:
@@ -98,17 +89,14 @@ def create_app() -> Flask:
             return _analysis_error_response(exc)
 
         preview = _build_preview(app, run_id, result)
-        return render_template(
-            "index.html",
+        return _render_index(
             result=preview,
-            error=None,
             defaults={
                 **_defaults(),
-                "last_target": target,
-                "last_report_format": report_format,
-                "last_use_llm": use_llm,
+                "last_target": form.target,
+                "last_report_format": form.report_format,
+                "last_use_llm": form.use_llm,
             },
-            csrf_token=_csrf_token(),
         )
 
     @app.get("/runs/<run_id>/<path:filename>")
@@ -166,14 +154,32 @@ def _defaults() -> dict[str, Any]:
     }
 
 
-def _analysis_error_response(exc: Exception):
+def _render_index(
+    result: dict[str, Any] | None = None,
+    error: str | None = None,
+    defaults: dict[str, Any] | None = None,
+) -> str:
     return render_template(
         "index.html",
-        result=None,
-        error=_public_error_message(exc),
-        defaults=_defaults(),
+        result=result,
+        error=error,
+        defaults=defaults or _defaults(),
         csrf_token=_csrf_token(),
-    ), 400
+    )
+
+
+def _parse_analyze_form() -> AnalyzeForm:
+    return AnalyzeForm(
+        target=_clean_text(request.form.get("target")),
+        use_llm=request.form.get("use_llm") == "on",
+        report_format=_clean_text(request.form.get("report_format")) or "both",
+        max_categories=web_max_categories(request.form.get("max_categories")),
+        csv_text=_clean_text(request.form.get("csv_text")),
+    )
+
+
+def _analysis_error_response(exc: Exception):
+    return _render_index(error=_public_error_message(exc)), 400
 
 
 def _public_error_message(exc: Exception) -> str:
@@ -207,6 +213,19 @@ def _int_or_default(value: str | None, default: int) -> int:
         return int(value) if value is not None else default
     except ValueError:
         return default
+
+
+def web_max_categories(value: str | None) -> int:
+    cleaned = _clean_text(value)
+    if cleaned.startswith("-"):
+        numeric_text = cleaned[1:]
+    else:
+        numeric_text = cleaned
+    if len(numeric_text) > WEB_MAX_CATEGORIES_DIGITS or not numeric_text.isdecimal():
+        parsed = WEB_DEFAULT_CATEGORIES
+    else:
+        parsed = _int_or_default(cleaned, WEB_DEFAULT_CATEGORIES)
+    return min(max(parsed, WEB_MIN_CATEGORIES), WEB_MAX_CATEGORIES)
 
 
 def _run_dir(app: Flask, run_id: str) -> Path:
