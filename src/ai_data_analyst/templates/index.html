@@ -5,156 +5,650 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>AI 数据分析助手</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f7f9fc; color: #102a43; }
-    header { padding: 24px 28px 12px; background: white; border-bottom: 1px solid #e6e8ef; }
-    main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 40px; }
-    .panel { background: white; border: 1px solid #e6e8ef; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
-    label { display: block; font-weight: 600; margin: 12px 0 6px; }
-    input[type="text"], input[type="number"], select, input[type="file"] { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd2d9; border-radius: 8px; background: white; }
-    .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-    .actions { margin-top: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-    button { border: 0; background: #1d4ed8; color: white; padding: 10px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; }
-    button:hover { background: #1e40af; }
-    .error { background: #fff1f0; border: 1px solid #f5c2c7; color: #b42318; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px; }
-    .result-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; }
-    .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-    .card { border: 1px solid #e6e8ef; border-radius: 10px; padding: 14px; background: #fcfdff; }
-    .muted { color: #627d98; }
-    table { border-collapse: collapse; width: 100%; }
-    th, td { border-bottom: 1px solid #e6e8ef; text-align: left; padding: 8px 6px; vertical-align: top; }
-    img { max-width: 100%; height: auto; border: 1px solid #e6e8ef; border-radius: 8px; background: white; }
-    .charts { display: grid; gap: 16px; }
-    pre { white-space: pre-wrap; word-break: break-word; background: #f7fafc; border: 1px solid #e6e8ef; padding: 14px; border-radius: 8px; }
-    a { color: #1d4ed8; text-decoration: none; }
+    :root {
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --panel-soft: #f8fafc;
+      --line: #d9e2ec;
+      --text: #102a43;
+      --muted: #627d98;
+      --blue: #1d4ed8;
+      --blue-dark: #1e40af;
+      --cyan: #0e7490;
+      --cyan-soft: #e0f2fe;
+      --green: #047857;
+      --green-soft: #ecfdf5;
+      --red: #b42318;
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+    a { color: var(--blue); text-decoration: none; }
     a:hover { text-decoration: underline; }
-    @media (max-width: 900px) {
-      .row, .result-grid, .cards { grid-template-columns: 1fr; }
+    .topbar {
+      background: rgba(255, 255, 255, 0.96);
+      border-bottom: 1px solid var(--line);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    .topbar-inner {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-width: 0;
+    }
+    .brand-mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: linear-gradient(135deg, var(--blue), var(--cyan));
+      color: white;
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: 18px; line-height: 1.25; }
+    h2 { font-size: 17px; margin-bottom: 14px; }
+    h3 { font-size: 14px; margin-bottom: 8px; }
+    .muted { color: var(--muted); }
+    .status-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: var(--panel-soft);
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    .pill.positive {
+      background: var(--green-soft);
+      border-color: #bbf7d0;
+      color: var(--green);
+    }
+    .pill.info {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+      color: var(--blue);
+    }
+    .page {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 22px 20px 42px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 420px) 1fr;
+      gap: 18px;
+      align-items: start;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .panel-body { padding: 18px; }
+    .form-panel { position: sticky; top: 78px; }
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .field { margin-top: 14px; }
+    label {
+      display: block;
+      font-weight: 650;
+      margin-bottom: 7px;
+      font-size: 14px;
+    }
+    .input-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .input-heading label { margin: 0; }
+    .source-badge {
+      border-radius: 999px;
+      background: white;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      padding: 4px 8px;
+      white-space: nowrap;
+    }
+    input[type="text"], input[type="number"], select, input[type="file"], textarea {
+      width: 100%;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      background: white;
+      color: var(--text);
+      padding: 10px 12px;
+      font: inherit;
+    }
+    textarea {
+      resize: vertical;
+      min-height: 130px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 13px;
+    }
+    input:focus, textarea:focus, select:focus {
+      outline: 2px solid rgba(29, 78, 216, 0.16);
+      border-color: var(--blue);
+    }
+    .input-choice {
+      display: grid;
+      gap: 12px;
+    }
+    .choice-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 13px;
+      background: var(--panel-soft);
+      transition: border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
+    }
+    .choice-box.active {
+      border-color: #7dd3fc;
+      background: #f0f9ff;
+      box-shadow: 0 0 0 3px rgba(14, 116, 144, 0.08);
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .toggle-line {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 42px;
+      margin-top: 28px;
+      color: var(--text);
+      font-weight: 650;
+    }
+    .actions {
+      margin-top: 18px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    button, .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border: 0;
+      border-radius: 8px;
+      background: var(--blue);
+      color: white;
+      padding: 10px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      min-height: 40px;
+    }
+    button:hover, .button:hover {
+      background: var(--blue-dark);
+      text-decoration: none;
+    }
+    button[aria-busy="true"] {
+      background: var(--blue-dark);
+      cursor: wait;
+    }
+    .button.secondary {
+      background: white;
+      color: var(--blue);
+      border: 1px solid var(--line);
+    }
+    .button.secondary:hover { background: #eff6ff; }
+    .error {
+      border: 1px solid #f5c2c7;
+      background: #fff1f0;
+      color: var(--red);
+      padding: 12px 14px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+    }
+    .privacy-strip {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 10px;
+      align-items: start;
+      border: 1px solid #bfdbfe;
+      background: #eff6ff;
+      border-radius: 8px;
+      padding: 12px;
+    }
+    .privacy-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: white;
+      color: var(--blue);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+    .empty-state {
+      min-height: 360px;
+      display: grid;
+      align-content: center;
+      gap: 16px;
+    }
+    .steps {
+      display: grid;
+      gap: 10px;
+    }
+    .step {
+      display: grid;
+      grid-template-columns: 32px 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-soft);
+    }
+    .step-index {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--cyan-soft);
+      color: var(--cyan);
+      display: grid;
+      place-items: center;
+      font-weight: 800;
+    }
+    .run-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .metric {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      min-width: 0;
+    }
+    .metric-label {
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+    .metric-value {
+      font-size: 22px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+    .insight {
+      border-left: 4px solid var(--cyan);
+      background: #f0f9ff;
+    }
+    .insight h2 {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .mode-chip {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      background: white;
+      border: 1px solid #bae6fd;
+      color: var(--cyan);
+      font-size: 12px;
+      font-weight: 800;
+      padding: 5px 8px;
+      white-space: nowrap;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: inherit;
+      line-height: 1.65;
+      color: var(--text);
+    }
+    .download-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+    .charts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }
+    figure {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: white;
+      overflow: hidden;
+    }
+    img {
+      width: 100%;
+      height: auto;
+      display: block;
+      background: white;
+    }
+    figcaption {
+      padding: 10px 12px;
+      border-top: 1px solid var(--line);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .path-text {
+      overflow-wrap: anywhere;
+      font-size: 13px;
+    }
+    .result-stack {
+      display: grid;
+      gap: 18px;
+    }
+    @media (max-width: 980px) {
+      .layout, .metrics, .charts, .row { grid-template-columns: 1fr; }
+      .form-panel { position: static; }
+      .topbar-inner { align-items: flex-start; flex-direction: column; }
+      .status-row { justify-content: flex-start; }
+    }
+    @media (max-width: 560px) {
+      .page { padding: 16px 12px 32px; }
+      .topbar-inner { padding: 12px; }
+      .panel-body { padding: 14px; }
+      .metric-value { font-size: 20px; }
+      button, .button { width: 100%; }
+      .download-row { display: grid; grid-template-columns: 1fr; }
     }
   </style>
 </head>
 <body>
-  <header>
-    <h1>AI 数据分析助手</h1>
-    <div class="muted">上传 CSV，自动生成 EDA、图表和分析结论。</div>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <div class="brand-mark">AI</div>
+        <div>
+          <h1>AI 数据分析助手</h1>
+          <p class="muted">CSV EDA、可视化与报告生成工作台</p>
+        </div>
+      </div>
+      <div class="status-row">
+        <span class="pill positive">默认离线</span>
+        <span class="pill info">LLM 按需启用</span>
+        <span class="pill">本地报告</span>
+      </div>
+    </div>
   </header>
-  <main>
+
+  <main class="page">
     {% if error %}
       <div class="error">{{ error }}</div>
     {% endif %}
 
-    <section class="panel">
-      <form action="/analyze" method="post" enctype="multipart/form-data" id="analysis-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <label for="csv_file">CSV 文件</label>
-        <input id="csv_file" name="csv_file" type="file" accept=".csv,text/csv">
-
-        <label for="csv_text">或直接粘贴 CSV 内容</label>
-        <textarea id="csv_text" name="csv_text" rows="8" placeholder="a,b,c&#10;1,2,3"></textarea>
-        <div class="muted">如果填了文本，上传文件会被忽略。</div>
-
-        <div class="row">
-          <div>
-            <label for="target">目标列（可选）</label>
-            <input id="target" name="target" type="text" placeholder="例如 revenue" value="{{ defaults.last_target }}">
+    <div class="layout">
+      <section class="panel form-panel">
+        <div class="panel-body">
+          <div class="section-title">
+            <div>
+              <h2>数据输入</h2>
+              <p class="muted">上传文件或粘贴 CSV，二选一。</p>
+            </div>
           </div>
-          <div>
-            <label for="max_categories">类别 Top N</label>
-            <input id="max_categories" name="max_categories" type="number" min="1" value="10">
-          </div>
-        </div>
 
-        <div class="row">
-          <div>
-            <label for="report_format">报告格式</label>
-            <select id="report_format" name="report_format">
-              <option value="both" {% if defaults.last_report_format == 'both' %}selected{% endif %}>Markdown + HTML</option>
-              <option value="markdown" {% if defaults.last_report_format == 'markdown' %}selected{% endif %}>Markdown</option>
-              <option value="html" {% if defaults.last_report_format == 'html' %}selected{% endif %}>HTML</option>
-            </select>
-          </div>
-          <div>
-            <label style="display:flex; gap:10px; align-items:center; margin-top: 32px;">
-              <input type="checkbox" name="use_llm" {% if defaults.last_use_llm %}checked{% endif %}>
-              启用 LLM
-            </label>
-          </div>
-        </div>
+          <form action="/analyze" method="post" enctype="multipart/form-data" id="analysis-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="input-choice">
+              <div class="choice-box" id="file-choice">
+                <div class="input-heading">
+                  <label for="csv_file">上传 CSV 文件</label>
+                  <span class="source-badge">本地文件</span>
+                </div>
+                <input id="csv_file" name="csv_file" type="file" accept=".csv,text/csv">
+              </div>
 
-        <div class="actions">
-          <button type="submit">开始分析</button>
-          <span class="muted">默认离线，只有勾选 LLM 才会请求外部 API。</span>
-        </div>
-      </form>
-    </section>
+              <div class="choice-box" id="text-choice">
+                <div class="input-heading">
+                  <label for="csv_text">粘贴 CSV 内容</label>
+                  <span class="source-badge">快速试算</span>
+                </div>
+                <textarea id="csv_text" name="csv_text" rows="8" placeholder="a,b,c&#10;1,2,3"></textarea>
+                <p class="muted">如果填了文本，请不要同时上传文件。</p>
+              </div>
+            </div>
 
-    {% if result %}
-      <section class="panel">
-        <h2>分析结果</h2>
-        <div class="cards">
-          <div class="card">
-            <div class="muted">输出目录</div>
-            <div>{{ result.output_dir }}</div>
-          </div>
-          <div class="card">
-            <div class="muted">概要文件</div>
-            <div><a href="{{ result.summary_url }}" target="_blank" rel="noreferrer">summary.json</a></div>
-          </div>
-          <div class="card">
-            <div class="muted">图表数量</div>
-            <div>{{ result.charts|length }}</div>
-          </div>
-        </div>
-      </section>
+            <div class="row">
+              <div class="field">
+                <label for="target">目标列（可选）</label>
+                <input id="target" name="target" type="text" placeholder="例如 revenue" value="{{ defaults.last_target }}">
+              </div>
+              <div class="field">
+                <label for="max_categories">类别 Top N</label>
+                <input id="max_categories" name="max_categories" type="number" min="1" value="10">
+              </div>
+            </div>
 
-      <section class="panel">
-        <h2>结论</h2>
-        <pre>{{ result.insights.content }}</pre>
-      </section>
+            <div class="row">
+              <div class="field">
+                <label for="report_format">报告格式</label>
+                <select id="report_format" name="report_format">
+                  <option value="both" {% if defaults.last_report_format == 'both' %}selected{% endif %}>Markdown + HTML</option>
+                  <option value="markdown" {% if defaults.last_report_format == 'markdown' %}selected{% endif %}>Markdown</option>
+                  <option value="html" {% if defaults.last_report_format == 'html' %}selected{% endif %}>HTML</option>
+                </select>
+              </div>
+              <label class="toggle-line">
+                <input type="checkbox" name="use_llm" {% if defaults.last_use_llm %}checked{% endif %}>
+                启用 LLM 洞察
+              </label>
+            </div>
 
-      <section class="panel">
-        <h2>可视化</h2>
-        <div class="charts">
-          {% for chart in result.charts %}
-            {% if chart.rendered and chart.url %}
-              <figure>
-                <img src="{{ chart.url }}" alt="{{ chart.title }}">
-                <figcaption class="muted">{{ chart.title }}</figcaption>
-              </figure>
-            {% else %}
-              <div class="card">{{ chart.title }}</div>
-            {% endif %}
-          {% endfor %}
+            <div class="actions">
+              <button type="submit">开始分析</button>
+              <span class="muted">默认不会请求外部 API。</span>
+            </div>
+          </form>
         </div>
       </section>
 
-      <section class="panel">
-        <h2>报告下载</h2>
-        <ul>
-          {% for name, url in result.report_urls.items() %}
-            <li><a href="{{ url }}" target="_blank" rel="noreferrer">{{ name }}</a></li>
-          {% endfor %}
-          <li><a href="{{ result.summary_url }}" target="_blank" rel="noreferrer">summary.json</a></li>
-        </ul>
+      <section class="result-stack">
+        {% if result %}
+          <div class="run-meta">
+            <span class="pill">Run {{ result.run_id }}</span>
+            <span class="pill positive">报告已生成</span>
+          </div>
+
+          <div class="metrics">
+            <div class="metric">
+              <div class="metric-label">行数</div>
+              <div class="metric-value">{{ result.eda_summary.shape.rows }}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">列数</div>
+              <div class="metric-value">{{ result.eda_summary.shape.columns }}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">图表</div>
+              <div class="metric-value">{{ result.charts|length }}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-label">洞察模式</div>
+              <div class="metric-value">{{ result.insights.mode }}</div>
+            </div>
+          </div>
+
+          <section class="panel insight">
+            <div class="panel-body">
+              <h2>
+                <span>分析结论</span>
+                <span class="mode-chip">{{ result.insights.mode }}</span>
+              </h2>
+              <pre>{{ result.insights.content }}</pre>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-body">
+              <div class="section-title">
+                <div>
+                  <h2>报告下载</h2>
+                  <p class="muted path-text">运行编号：{{ result.output_label }}</p>
+                </div>
+              </div>
+              <div class="download-row">
+                {% for name, url in result.report_urls.items() %}
+                  <a class="button secondary" href="{{ url }}" target="_blank" rel="noreferrer">{{ name }}</a>
+                {% endfor %}
+                <a class="button secondary" href="{{ result.summary_url }}" target="_blank" rel="noreferrer">summary.json</a>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-body">
+              <h2>图表预览</h2>
+              <div class="charts">
+                {% for chart in result.charts %}
+                  {% if chart.rendered and chart.url %}
+                    <figure>
+                      <img src="{{ chart.url }}" alt="{{ chart.title }}">
+                      <figcaption>{{ chart.title }}</figcaption>
+                    </figure>
+                  {% else %}
+                    <div class="metric">{{ chart.title }}</div>
+                  {% endif %}
+                {% endfor %}
+              </div>
+            </div>
+          </section>
+        {% else %}
+          <section class="panel">
+            <div class="panel-body empty-state">
+              <div class="privacy-strip">
+                <div class="privacy-icon">✓</div>
+                <div>
+                  <h3>隐私保护</h3>
+                  <p class="muted">默认离线分析；启用 LLM 时仅发送字段画像与聚合统计。</p>
+                </div>
+              </div>
+              <div>
+                <h2>准备开始分析</h2>
+                <p class="muted">选择 CSV 数据后，系统会自动生成字段画像、EDA、图表和报告。</p>
+              </div>
+              <div class="steps">
+                <div class="step">
+                  <div class="step-index">1</div>
+                  <div>
+                    <h3>导入数据</h3>
+                    <p class="muted">上传 CSV 文件，或直接粘贴少量 CSV 内容。</p>
+                  </div>
+                </div>
+                <div class="step">
+                  <div class="step-index">2</div>
+                  <div>
+                    <h3>配置分析</h3>
+                    <p class="muted">目标列可选，LLM 默认关闭以保护隐私。</p>
+                  </div>
+                </div>
+                <div class="step">
+                  <div class="step-index">3</div>
+                  <div>
+                    <h3>查看结果</h3>
+                    <p class="muted">优先展示关键指标、结论、图表和报告下载。</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        {% endif %}
       </section>
-    {% endif %}
+    </div>
   </main>
+
   <script>
     (function () {
       const form = document.getElementById('analysis-form');
       const fileInput = document.getElementById('csv_file');
       const textInput = document.getElementById('csv_text');
+      const fileChoice = document.getElementById('file-choice');
+      const textChoice = document.getElementById('text-choice');
+      const submitButton = form.querySelector('button[type="submit"]');
 
       function syncRequiredState() {
         const hasText = textInput.value.trim().length > 0;
         const hasFile = fileInput.files && fileInput.files.length > 0;
         fileInput.required = !hasText && !hasFile;
         textInput.required = !hasFile && !hasText;
+        fileChoice.classList.toggle('active', hasFile);
+        textChoice.classList.toggle('active', hasText);
+      }
+
+      function syncMutualExclusion() {
+        const hasText = textInput.value.trim().length > 0;
+        const hasFile = fileInput.files && fileInput.files.length > 0;
+        const message = hasText && hasFile ? '请只选择一种输入方式：上传文件或粘贴 CSV。' : '';
+        textInput.setCustomValidity(message);
+        fileInput.setCustomValidity(message);
+        return !message;
       }
 
       fileInput.addEventListener('change', syncRequiredState);
       textInput.addEventListener('input', syncRequiredState);
-      form.addEventListener('submit', syncRequiredState);
+      fileInput.addEventListener('change', syncMutualExclusion);
+      textInput.addEventListener('input', syncMutualExclusion);
+      form.addEventListener('submit', function (event) {
+        syncRequiredState();
+        if (!syncMutualExclusion()) {
+          event.preventDefault();
+          form.reportValidity();
+          return;
+        }
+        if (form.checkValidity()) {
+          submitButton.setAttribute('aria-busy', 'true');
+          submitButton.textContent = '分析中...';
+        }
+      });
       syncRequiredState();
+      syncMutualExclusion();
     })();
   </script>
 </body>

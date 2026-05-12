@@ -5,8 +5,9 @@ from __future__ import annotations
 import os
 import uuid
 from secrets import token_urlsafe
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 from flask import Flask, abort, render_template, request, send_from_directory, session, url_for
 
@@ -71,12 +72,13 @@ def create_app() -> Flask:
 
         run_id = uuid.uuid4().hex[:12]
         run_dir = _run_dir(app, run_id)
-        run_dir.mkdir(parents=True, exist_ok=True)
+        input_dir = run_dir / "_inputs"
+        input_dir.mkdir(parents=True, exist_ok=True)
         if csv_text:
-            csv_path = run_dir / "pasted.csv"
+            csv_path = input_dir / "pasted.csv"
             csv_path.write_text(csv_text, encoding="utf-8")
         else:
-            csv_path = run_dir / _safe_filename(uploaded.filename or "")
+            csv_path = input_dir / _safe_filename(uploaded.filename or "")
             uploaded.save(csv_path)
 
         try:
@@ -112,7 +114,7 @@ def create_app() -> Flask:
     @app.get("/runs/<run_id>/<path:filename>")
     def artifact(run_id: str, filename: str) -> Any:
         run_dir = _run_dir(app, run_id)
-        if not run_dir.exists():
+        if not run_dir.exists() or not _is_allowed_artifact(filename):
             abort(404)
         return send_from_directory(run_dir, filename, as_attachment=False)
 
@@ -133,17 +135,21 @@ def _build_preview(app: Flask, run_id: str, result) -> dict[str, Any]:
         for name, path in result.report_paths.items()
     }
     summary_url = _artifact_url(app, run_id, result.output_dir, result.summary_path)
-    charts = [
-        {
-            "title": chart.get("title"),
-            "url": _artifact_url(app, run_id, result.output_dir, Path(chart["path"])),
-            "rendered": chart.get("rendered", True),
-        }
-        for chart in result.charts
-    ]
+    charts = []
+    for chart in result.charts:
+        url = None
+        if chart.get("rendered", True) and chart.get("path"):
+            url = _artifact_url(app, run_id, result.output_dir, Path(chart["path"]))
+        charts.append(
+            {
+                "title": chart.get("title"),
+                "url": url,
+                "rendered": chart.get("rendered", True),
+            }
+        )
     return {
         "run_id": run_id,
-        "output_dir": str(result.output_dir),
+        "output_label": f"runs/{run_id}",
         "summary_url": summary_url,
         "report_urls": report_paths,
         "insights": result.insights,
@@ -182,7 +188,22 @@ def _run_dir(app: Flask, run_id: str) -> Path:
 
 def _artifact_url(app: Flask, run_id: str, output_dir: Path, path: Path) -> str:
     relative = Path(path).resolve().relative_to(output_dir.resolve()).as_posix()
+    if not _is_allowed_artifact(relative):
+        raise ValueError(f"Artifact is not web-accessible: {relative}")
     return url_for("artifact", run_id=run_id, filename=relative)
+
+
+def _is_allowed_artifact(filename: str) -> bool:
+    path = PurePosixPath(filename)
+    if path.is_absolute() or not path.parts:
+        return False
+    if any(part in {"", ".", ".."} for part in path.parts):
+        return False
+    if len(path.parts) == 1:
+        return path.name in {"summary.json", "report.md", "report.html"}
+    if len(path.parts) == 2 and path.parts[0] == "figures":
+        return path.suffix.lower() == ".png"
+    return False
 
 
 def _csrf_token() -> str:
@@ -197,15 +218,47 @@ def _check_csrf() -> bool:
     origin = request.headers.get("Origin", "")
     referer = request.headers.get("Referer", "")
     host = request.host_url.rstrip("/")
-    if origin and not origin.startswith(host):
+    if origin and not _same_origin(origin, host):
         return False
-    if referer and not referer.startswith(host):
+    if referer and not _same_origin(referer, host):
         return False
     form_token = request.form.get("csrf_token", "")
     session_token = session.get("ai_analyst_csrf", "")
     if not session_token or not form_token:
         return False
     return session_token == form_token
+
+
+def _same_origin(candidate: str, expected: str) -> bool:
+    try:
+        candidate_parts = urlsplit(candidate)
+        expected_parts = urlsplit(expected)
+    except ValueError:
+        return False
+    if not candidate_parts.scheme or not candidate_parts.netloc:
+        return False
+    try:
+        return (
+            candidate_parts.scheme.lower(),
+            candidate_parts.hostname.lower() if candidate_parts.hostname else "",
+            _normalized_port(candidate_parts),
+        ) == (
+            expected_parts.scheme.lower(),
+            expected_parts.hostname.lower() if expected_parts.hostname else "",
+            _normalized_port(expected_parts),
+        )
+    except ValueError:
+        return False
+
+
+def _normalized_port(parts) -> int | None:
+    if parts.port is not None:
+        return parts.port
+    if parts.scheme.lower() == "http":
+        return 80
+    if parts.scheme.lower() == "https":
+        return 443
+    return None
 
 
 if __name__ == "__main__":
