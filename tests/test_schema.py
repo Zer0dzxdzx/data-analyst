@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from ai_data_analyst.schema import infer_column_type, profile_dataframe
+from ai_data_analyst.schema import coerce_numeric, infer_column_type, profile_dataframe
 
 
 class SchemaInferenceTests(unittest.TestCase):
@@ -30,6 +30,12 @@ class SchemaInferenceTests(unittest.TestCase):
     def test_unknown_for_all_missing_column(self):
         series = pd.Series([None, None], name="empty")
         self.assertEqual(infer_column_type(series), "unknown")
+
+    def test_numeric_text_with_currency_and_thousands(self):
+        series = pd.Series(["$1,200", "$2,500", "$3,750"], name="revenue")
+
+        self.assertEqual(infer_column_type(series), "numeric")
+        self.assertEqual(coerce_numeric(series).tolist(), [1200, 2500, 3750])
 
 
 if __name__ == "__main__":

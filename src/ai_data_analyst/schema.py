@@ -78,6 +78,21 @@ def profiles_by_name(profiles: list[ColumnProfile]) -> dict[str, ColumnProfile]:
     return {profile.name: profile for profile in profiles}
 
 
+def coerce_numeric(series: pd.Series) -> pd.Series:
+    """Convert common numeric text formats without mutating the source series."""
+
+    if pdt.is_numeric_dtype(series):
+        return pd.to_numeric(series, errors="coerce")
+    cleaned = (
+        series.astype("string")
+        .str.strip()
+        .str.replace(r"[$¥€£]", "", regex=True)
+        .str.replace(",", "", regex=False)
+        .str.replace("%", "", regex=False)
+    )
+    return pd.to_numeric(cleaned, errors="coerce")
+
+
 def _is_boolean_like(series: pd.Series) -> bool:
     if pdt.is_bool_dtype(series):
         return True
@@ -112,7 +127,7 @@ def _is_id_like(name: str, series: pd.Series, unique_rate: float) -> bool:
 def _can_parse_numeric(series: pd.Series) -> bool:
     if pdt.is_numeric_dtype(series):
         return True
-    parsed = pd.to_numeric(series, errors="coerce")
+    parsed = coerce_numeric(series)
     return float(parsed.notna().mean()) >= 0.9
 
 

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
-from ai_data_analyst.schema import ColumnProfile, profiles_by_name
+from ai_data_analyst.schema import ColumnProfile, coerce_numeric, profiles_by_name
 
 
 def build_eda_summary(
@@ -60,7 +62,7 @@ def _missing_summary(frame: pd.DataFrame) -> dict[str, Any]:
 def _numeric_summary(frame: pd.DataFrame, columns: list[str]) -> dict[str, Any]:
     if not columns:
         return {}
-    numeric_frame = frame[columns].apply(pd.to_numeric, errors="coerce")
+    numeric_frame = frame[columns].apply(coerce_numeric).replace([np.inf, -np.inf], np.nan)
     described = numeric_frame.describe().transpose()
     result: dict[str, Any] = {}
     for column, row in described.iterrows():
@@ -115,7 +117,7 @@ def _datetime_summary(frame: pd.DataFrame, columns: list[str]) -> dict[str, Any]
 def _correlation_summary(frame: pd.DataFrame, columns: list[str]) -> dict[str, Any]:
     if len(columns) < 2:
         return {"matrix": {}, "strong_pairs": []}
-    numeric_frame = frame[columns].apply(pd.to_numeric, errors="coerce")
+    numeric_frame = frame[columns].apply(coerce_numeric).replace([np.inf, -np.inf], np.nan)
     corr = numeric_frame.corr(numeric_only=True)
     matrix = {
         str(index): {str(column): _safe_float(value) for column, value in row.items()}
@@ -141,10 +143,15 @@ def _column_type_counts(profiles: list[ColumnProfile]) -> dict[str, int]:
 def _safe_float(value: Any) -> float | None:
     if pd.isna(value):
         return None
-    return round(float(value), 6)
+    converted = float(value)
+    if not math.isfinite(converted):
+        return None
+    return round(converted, 6)
 
 
 def _json_value(value: Any) -> str | int | float | bool:
-    if isinstance(value, (str, int, float, bool)):
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, (str, int, bool)):
         return value
     return str(value)

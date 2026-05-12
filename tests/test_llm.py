@@ -56,6 +56,32 @@ class LlmFallbackTests(unittest.TestCase):
         self.assertEqual(payload["charts"][0]["title"], "Distribution of revenue")
         self.assertNotIn("/tmp/secret.png", str(payload))
 
+    def test_tiny_dataset_suppresses_numeric_and_datetime_aggregates(self):
+        profiles = [
+            ColumnProfile("revenue", "int64", "numeric", 0, 0.0, 1, 1.0),
+            ColumnProfile("order_date", "object", "datetime", 0, 0.0, 1, 1.0),
+        ]
+        payload = build_privacy_payload(
+            profiles,
+            {
+                "shape": {"rows": 1, "columns": 2},
+                "missing": {"by_column": [], "columns_with_missing": 0, "total_missing_cells": 0},
+                "numeric": {"revenue": {"count": 1, "mean": 999.0, "median": 999.0, "min": 999.0, "max": 999.0}},
+                "categorical": {},
+                "datetime": {"order_date": {"valid_count": 1, "min": "2025-01-01", "max": "2025-01-01"}},
+                "correlation": {"strong_pairs": [{"columns": ["revenue", "other"], "correlation": 1.0}]},
+            },
+            "revenue",
+            [],
+            min_group_size=5,
+        )
+
+        self.assertTrue(payload["numeric"]["revenue"]["suppressed"])
+        self.assertNotIn("999.0", str(payload["numeric"]))
+        self.assertTrue(payload["datetime"]["order_date"]["suppressed"])
+        self.assertNotIn("2025-01-01", str(payload["datetime"]))
+        self.assertEqual(payload["correlation"]["strong_pairs"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

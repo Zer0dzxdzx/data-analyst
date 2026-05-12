@@ -43,7 +43,15 @@ def analyze_csv(path: str | Path, config: AnalysisConfig) -> AnalysisResult:
 
     profiles = profile_dataframe(frame)
     eda_summary = build_eda_summary(frame, profiles, normalized.max_categories)
-    charts = generate_charts(frame, profiles, figures_dir, normalized.max_categories)
+    charts = generate_charts(
+        frame,
+        profiles,
+        figures_dir,
+        max_categories=normalized.max_categories,
+        max_numeric_charts=normalized.max_numeric_charts,
+        max_categorical_charts=normalized.max_categorical_charts,
+        max_heatmap_columns=normalized.max_heatmap_columns,
+    )
     insights = generate_insights(
         profiles=profiles,
         eda_summary=eda_summary,
@@ -51,6 +59,7 @@ def analyze_csv(path: str | Path, config: AnalysisConfig) -> AnalysisResult:
         chart_meta=charts,
         use_llm=normalized.use_llm,
         timeout_seconds=normalized.request_timeout_seconds,
+        min_group_size=normalized.min_llm_group_size,
     )
     summary_path = write_summary_json(normalized.output_dir, profiles, eda_summary, charts, insights)
     report_paths = write_reports(

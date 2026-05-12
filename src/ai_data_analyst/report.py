@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,8 @@ def write_summary_json(
         },
         "privacy_payload_sent_to_llm": insights.get("privacy_payload"),
     }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    safe_payload = _json_safe(payload)
+    path.write_text(json.dumps(safe_payload, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
     return path
 
 
@@ -67,7 +69,7 @@ def _build_markdown(
     missing = eda_summary.get("missing", {})
     strong_pairs = eda_summary.get("correlation", {}).get("strong_pairs", [])
     lines = [
-        f"# AI Data Analysis Report: {source_name}",
+        f"# AI Data Analysis Report: {_md_text(source_name)}",
         "",
         "## Overview",
         "",
@@ -83,7 +85,7 @@ def _build_markdown(
     ]
     for profile in profiles:
         lines.append(
-            f"| {profile.name} | {profile.inferred_type} | {profile.pandas_dtype} | "
+            f"| {_md_cell(profile.name)} | {_md_cell(profile.inferred_type)} | {_md_cell(profile.pandas_dtype)} | "
             f"{profile.missing_rate:.2%} | {profile.unique_count} |"
         )
 
@@ -98,7 +100,7 @@ def _build_markdown(
         )
         for column, values in numeric.items():
             lines.append(
-                f"| {column} | {_fmt(values.get('mean'))} | {_fmt(values.get('median'))} | "
+                f"| {_md_cell(column)} | {_fmt(values.get('mean'))} | {_fmt(values.get('median'))} | "
                 f"{_fmt(values.get('min'))} | {_fmt(values.get('max'))} | {_fmt(values.get('std'))} |"
             )
     else:
@@ -111,7 +113,7 @@ def _build_markdown(
         lines.extend(["| Column | Missing count | Missing rate |", "| --- | ---: | ---: |"])
         for item in missing_with_values[:10]:
             lines.append(
-                f"| {item['column']} | {item['missing_count']} | {float(item['missing_rate']):.2%} |"
+                f"| {_md_cell(item['column'])} | {item['missing_count']} | {float(item['missing_rate']):.2%} |"
             )
     else:
         lines.append("No missing values detected.")
@@ -120,15 +122,18 @@ def _build_markdown(
     if strong_pairs:
         for pair in strong_pairs[:10]:
             left, right = pair["columns"]
-            lines.append(f"- {left} vs {right}: {pair['correlation']}")
+            lines.append(f"- {_md_text(left)} vs {_md_text(right)}: {pair['correlation']}")
     else:
         lines.append("No strong numeric correlations detected.")
 
     lines.extend(["", "## Visualizations", ""])
     if chart_meta:
         for item in _relative_chart_meta(output_dir, chart_meta):
-            lines.append(f"![{item['title']}]({item['path']})")
-            lines.append("")
+            if item.get("rendered", True) and item.get("path"):
+                lines.append(f"![{_md_image_alt(item['title'])}]({item['path']})")
+                lines.append("")
+            else:
+                lines.append(f"- {_md_text(item['title'])}")
     else:
         lines.append("No charts were generated for this dataset.")
 
@@ -181,7 +186,7 @@ def _markdown_to_html(markdown: str) -> str:
     in_list = False
     for line in lines:
         if line.startswith("| ") and line.endswith(" |"):
-            cells = [cell.strip() for cell in line.strip("|").split("|")]
+            cells = [cell.strip() for cell in _split_markdown_table_row(line)]
             if all(set(cell.replace(" ", "")) <= {"-", ":"} for cell in cells):
                 next_table_row_is_header = False
                 continue
@@ -190,7 +195,9 @@ def _markdown_to_html(markdown: str) -> str:
                 in_table = True
                 next_table_row_is_header = True
             tag = "th" if next_table_row_is_header else "td"
-            html_lines.append("<tr>" + "".join(f"<{tag}>{html.escape(cell)}</{tag}>" for cell in cells) + "</tr>")
+            html_lines.append(
+                "<tr>" + "".join(f"<{tag}>{html.escape(_unescape_md_cell(cell))}</{tag}>" for cell in cells) + "</tr>"
+            )
             next_table_row_is_header = False
             continue
         if in_table:
@@ -232,7 +239,8 @@ def _relative_chart_meta(output_dir: Path, chart_meta: list[dict[str, Any]]) -> 
     relative = []
     for item in chart_meta:
         copied = dict(item)
-        copied["path"] = str(Path(item["path"]).resolve().relative_to(output_dir.resolve()))
+        if copied.get("path"):
+            copied["path"] = str(Path(copied["path"]).resolve().relative_to(output_dir.resolve()))
         relative.append(copied)
     return relative
 
@@ -243,3 +251,60 @@ def _fmt(value: Any) -> str:
     if isinstance(value, float):
         return f"{value:.4g}"
     return str(value)
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, tuple):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    return value
+
+
+def _md_cell(value: Any) -> str:
+    return _md_text(value).replace("|", r"\|")
+
+
+def _md_text(value: Any) -> str:
+    return str(value).replace("\r", " ").replace("\n", " ").strip()
+
+
+def _md_image_alt(value: Any) -> str:
+    return _md_text(value).replace("[", r"\[").replace("]", r"\]")
+
+
+def _split_markdown_table_row(line: str) -> list[str]:
+    content = line.strip()
+    if content.startswith("|"):
+        content = content[1:]
+    if content.endswith("|"):
+        content = content[:-1]
+
+    cells: list[str] = []
+    current: list[str] = []
+    escaped = False
+    for char in content:
+        if escaped:
+            current.append("\\" + char if char != "|" else r"\|")
+            escaped = False
+            continue
+        if char == "\\":
+            escaped = True
+            continue
+        if char == "|":
+            cells.append("".join(current))
+            current = []
+            continue
+        current.append(char)
+    if escaped:
+        current.append("\\")
+    cells.append("".join(current))
+    return cells
+
+
+def _unescape_md_cell(value: str) -> str:
+    return value.replace(r"\|", "|").replace(r"\[", "[").replace(r"\]", "]")

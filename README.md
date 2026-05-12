@@ -9,7 +9,7 @@
 - EDA：数据规模、缺失率、描述统计、类别 Top N、日期范围、相关性。
 - 可视化：缺失值、数值分布、类别 Top N、相关性热力图、时间趋势。
 - LLM 洞察：通过 OpenAI-compatible Chat Completions 输出中文分析结论。
-- 隐私保护：默认只发送 schema 与聚合统计给 LLM，不发送原始数据行。
+- 隐私保护：启用 LLM 时只发送 schema 与脱敏聚合统计，不发送原始数据行。
 
 ## 安装
 
@@ -21,16 +21,16 @@ python -m pip install -e .
 
 ## 快速开始
 
-无 API key 也可以运行，系统会使用离线模板生成结论：
+默认离线运行，系统会使用本地模板生成结论，不会发起网络请求：
 
 ```bash
-ai-data-analyst analyze examples/sales_sample.csv --out reports/sales_demo --target revenue --no-llm
+ai-data-analyst analyze examples/sales_sample.csv --out reports/sales_demo --target revenue
 ```
 
 或直接用模块方式运行：
 
 ```bash
-PYTHONPATH=src python3 -m ai_data_analyst analyze examples/sales_sample.csv --out reports/sales_demo --target revenue --no-llm
+PYTHONPATH=src python3 -m ai_data_analyst analyze examples/sales_sample.csv --out reports/sales_demo --target revenue
 ```
 
 输出文件：
@@ -48,10 +48,11 @@ PYTHONPATH=src python3 -m ai_data_analyst analyze examples/sales_sample.csv --ou
 export LLM_API_KEY="your-api-key"
 export LLM_BASE_URL="https://api.openai.com/v1"
 export LLM_MODEL="gpt-4o-mini"
-ai-data-analyst analyze examples/sales_sample.csv --out reports/sales_demo --target revenue
+ai-data-analyst analyze examples/sales_sample.csv --out reports/sales_demo --target revenue --llm
 ```
 
 `LLM_BASE_URL` 可以是 API 根路径，也可以直接是 `/chat/completions` 端点。
+CLI 只有显式传入 `--llm` 时才会调用外部 API。
 
 ## Python API
 
@@ -62,7 +63,7 @@ from ai_data_analyst import AnalysisConfig, analyze_csv
 
 result = analyze_csv(
     "examples/sales_sample.csv",
-    AnalysisConfig(output_dir=Path("reports/sales_demo"), target_column="revenue", use_llm=False),
+    AnalysisConfig(output_dir=Path("reports/sales_demo"), target_column="revenue"),
 )
 
 print(result.summary_path)

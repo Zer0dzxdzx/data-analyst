@@ -26,7 +26,7 @@ def load_csv(path: str | Path) -> pd.DataFrame:
     errors: list[str] = []
     for encoding in DEFAULT_ENCODINGS:
         try:
-            frame = pd.read_csv(csv_path, encoding=encoding)
+            frame = pd.read_csv(csv_path, encoding=encoding, sep=None, engine="python")
         except UnicodeDecodeError as exc:
             errors.append(f"{encoding}: {exc}")
             continue

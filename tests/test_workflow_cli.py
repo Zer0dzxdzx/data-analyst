@@ -1,6 +1,8 @@
 import json
+import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from ai_data_analyst.cli import main
@@ -33,11 +35,49 @@ class WorkflowCliTests(unittest.TestCase):
 
     def test_cli_analyze_success(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            exit_code = main(["analyze", str(SAMPLE), "--out", tmpdir, "--target", "revenue", "--no-llm"])
+            exit_code = main(["analyze", str(SAMPLE), "--out", tmpdir, "--target", "revenue"])
 
             self.assertEqual(exit_code, 0)
             self.assertTrue((Path(tmpdir) / "report.md").exists())
             self.assertTrue((Path(tmpdir) / "summary.json").exists())
+
+    def test_cli_defaults_offline_even_when_api_key_exists(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.dict(os.environ, {"LLM_API_KEY": "test-key"}):
+                with patch("ai_data_analyst.llm.httpx.post", side_effect=AssertionError("network called")):
+                    exit_code = main(["analyze", str(SAMPLE), "--out", tmpdir, "--target", "revenue"])
+
+            payload = json.loads((Path(tmpdir) / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["insights"]["mode"], "fallback")
+
+    def test_wide_dataset_records_skipped_charts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "wide.csv"
+            columns = [f"n{i}" for i in range(25)]
+            rows = [",".join(columns)]
+            for row_index in range(10):
+                rows.append(",".join(str(row_index + offset) for offset in range(25)))
+            csv_path.write_text("\n".join(rows), encoding="utf-8")
+
+            result = analyze_csv(csv_path, AnalysisConfig(output_dir=Path(tmpdir) / "out"))
+
+            skipped = [chart for chart in result.charts if not chart.get("rendered", True)]
+            self.assertTrue(skipped)
+            self.assertTrue(any(chart["kind"] == "correlation" for chart in skipped))
+
+    def test_summary_json_is_strict_json_and_markdown_escapes_columns(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "odd.csv"
+            csv_path.write_text("bad|name,normal\n1,2\n3,4\n", encoding="utf-8")
+
+            result = analyze_csv(csv_path, AnalysisConfig(output_dir=Path(tmpdir) / "out"))
+            summary_text = result.summary_path.read_text(encoding="utf-8")
+            markdown = result.report_paths["markdown"].read_text(encoding="utf-8")
+
+            json.loads(summary_text)
+            self.assertNotIn("Infinity", summary_text)
+            self.assertIn(r"bad\|name", markdown)
 
     def test_load_csv_rejects_empty_file(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -49,9 +89,19 @@ class WorkflowCliTests(unittest.TestCase):
 
     def test_cli_rejects_missing_target(self):
         with tempfile.TemporaryDirectory() as tmpdir:
-            exit_code = main(["analyze", str(SAMPLE), "--out", tmpdir, "--target", "does_not_exist", "--no-llm"])
+            exit_code = main(["analyze", str(SAMPLE), "--out", tmpdir, "--target", "does_not_exist"])
 
             self.assertEqual(exit_code, 2)
+
+    def test_load_csv_detects_semicolon_delimiter(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "semicolon.csv"
+            csv_path.write_text("a;b\n1;2\n3;4\n", encoding="utf-8")
+
+            frame = load_csv(csv_path)
+
+            self.assertEqual(list(frame.columns), ["a", "b"])
+            self.assertEqual(frame.shape, (2, 2))
 
 
 if __name__ == "__main__":

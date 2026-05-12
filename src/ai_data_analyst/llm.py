@@ -17,12 +17,13 @@ def generate_insights(
     chart_meta: list[dict[str, Any]],
     use_llm: bool = True,
     timeout_seconds: float = 30.0,
+    min_group_size: int = 5,
 ) -> dict[str, Any]:
     """Generate analysis conclusions through an LLM or local fallback."""
 
-    payload = build_privacy_payload(profiles, eda_summary, target_column, chart_meta)
+    payload = build_privacy_payload(profiles, eda_summary, target_column, chart_meta, min_group_size)
     if not use_llm:
-        return _fallback_insights(payload, reason="LLM disabled by --no-llm.")
+        return _fallback_insights(payload, reason="LLM disabled. Pass --llm to enable API calls.")
 
     api_key = os.getenv("LLM_API_KEY")
     if not api_key:
@@ -70,10 +71,12 @@ def build_privacy_payload(
     eda_summary: dict[str, Any],
     target_column: str | None,
     chart_meta: list[dict[str, Any]],
+    min_group_size: int = 5,
 ) -> dict[str, Any]:
     """Build a no-raw-rows payload for LLM prompting."""
 
     shape = eda_summary.get("shape", {})
+    rows = int(shape.get("rows", 0) or 0)
     missing = eda_summary.get("missing", {})
     numeric = eda_summary.get("numeric", {})
     categorical = eda_summary.get("categorical", {})
@@ -114,14 +117,21 @@ def build_privacy_payload(
                 if item.get("missing_count", 0) > 0
             ],
         },
-        "numeric": numeric,
+        "numeric": _privacy_safe_numeric(numeric, min_group_size),
         "categorical": sanitized_categories,
-        "datetime": datetime,
+        "datetime": _privacy_safe_datetime(datetime, min_group_size),
         "correlation": {
-            "strong_pairs": correlation.get("strong_pairs", [])[:10],
+            "strong_pairs": correlation.get("strong_pairs", [])[:10] if rows >= min_group_size else [],
+            "suppressed": rows < min_group_size,
         },
-        "charts": [{"kind": item.get("kind"), "title": item.get("title")} for item in chart_meta],
-        "privacy_note": "No raw rows or category labels are included in this payload.",
+        "charts": [
+            {"kind": item.get("kind"), "title": item.get("title"), "rendered": item.get("rendered", True)}
+            for item in chart_meta
+        ],
+        "privacy_note": (
+            "No raw rows or category labels are included in this payload. Numeric and datetime aggregates "
+            f"are suppressed when a column has fewer than {min_group_size} valid observations."
+        ),
     }
 
 
@@ -158,6 +168,39 @@ def _fallback_insights(payload: dict[str, Any], reason: str) -> dict[str, Any]:
         "reason": reason,
         "privacy_payload": payload,
     }
+
+
+def _privacy_safe_numeric(numeric: dict[str, Any], min_group_size: int) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for column, values in numeric.items():
+        count = int(values.get("count") or 0)
+        if count < min_group_size:
+            result[column] = {
+                "count": count,
+                "suppressed": True,
+                "reason": f"Fewer than {min_group_size} valid observations.",
+            }
+            continue
+        result[column] = {
+            key: values.get(key)
+            for key in ("count", "mean", "std")
+        }
+    return result
+
+
+def _privacy_safe_datetime(datetime: dict[str, Any], min_group_size: int) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for column, values in datetime.items():
+        valid_count = int(values.get("valid_count") or 0)
+        if valid_count < min_group_size:
+            result[column] = {
+                "valid_count": valid_count,
+                "suppressed": True,
+                "reason": f"Fewer than {min_group_size} valid observations.",
+            }
+            continue
+        result[column] = values
+    return result
 
 
 def _chat_completions_endpoint(base_url: str) -> str:

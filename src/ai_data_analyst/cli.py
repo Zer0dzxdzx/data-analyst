@@ -20,7 +20,9 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("--out", required=True, help="Output directory for report artifacts.")
     analyze.add_argument("--target", help="Optional target column for focused insights.")
     analyze.add_argument("--max-categories", type=int, default=10, help="Maximum top categories to display per column.")
-    analyze.add_argument("--no-llm", action="store_true", help="Skip LLM calls and use offline template insights.")
+    llm_group = analyze.add_mutually_exclusive_group()
+    llm_group.add_argument("--llm", action="store_true", help="Enable OpenAI-compatible LLM API calls.")
+    llm_group.add_argument("--no-llm", action="store_true", help="Keep offline template insights. This is the default.")
     analyze.add_argument(
         "--format",
         choices=("markdown", "html", "both"),
@@ -39,7 +41,7 @@ def main(argv: list[str] | None = None) -> int:
             output_dir=Path(args.out),
             target_column=args.target,
             max_categories=args.max_categories,
-            use_llm=not args.no_llm,
+            use_llm=args.llm,
             report_format=args.format,
         )
         try:
@@ -52,7 +54,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Summary JSON: {result.summary_path}")
         for label, path in result.report_paths.items():
             print(f"{label.title()} report: {path}")
-        print(f"Charts generated: {len(result.charts)}")
+        rendered_charts = sum(1 for chart in result.charts if chart.get("rendered", True))
+        print(f"Charts generated: {rendered_charts}")
         return 0
 
     parser.print_help()

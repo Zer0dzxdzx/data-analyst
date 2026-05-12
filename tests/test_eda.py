@@ -25,6 +25,14 @@ class EdaSummaryTests(unittest.TestCase):
         self.assertEqual(summary["correlation"]["strong_pairs"][0]["columns"], ["x", "y"])
         self.assertEqual(summary["correlation"]["strong_pairs"][0]["correlation"], 1.0)
 
+    def test_non_finite_values_are_json_safe(self):
+        frame = pd.DataFrame({"value": [1.0, float("inf"), float("-inf")]})
+        profiles = profile_dataframe(frame)
+        summary = build_eda_summary(frame, profiles)
+
+        self.assertEqual(summary["numeric"]["value"]["mean"], 1.0)
+        self.assertEqual(summary["numeric"]["value"]["max"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

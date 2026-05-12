@@ -15,7 +15,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from ai_data_analyst.schema import ColumnProfile
+from ai_data_analyst.schema import ColumnProfile, coerce_numeric
 
 
 def generate_charts(
@@ -23,15 +23,18 @@ def generate_charts(
     profiles: list[ColumnProfile],
     figures_dir: Path,
     max_categories: int = 10,
+    max_numeric_charts: int = 12,
+    max_categorical_charts: int = 12,
+    max_heatmap_columns: int = 20,
 ) -> list[dict[str, Any]]:
     """Generate report charts and return their metadata."""
 
     figures_dir.mkdir(parents=True, exist_ok=True)
     chart_meta: list[dict[str, Any]] = []
     chart_meta.extend(_missing_chart(frame, figures_dir))
-    chart_meta.extend(_numeric_histograms(frame, profiles, figures_dir))
-    chart_meta.extend(_categorical_bars(frame, profiles, figures_dir, max_categories))
-    chart_meta.extend(_correlation_heatmap(frame, profiles, figures_dir))
+    chart_meta.extend(_numeric_histograms(frame, profiles, figures_dir, max_numeric_charts))
+    chart_meta.extend(_categorical_bars(frame, profiles, figures_dir, max_categories, max_categorical_charts))
+    chart_meta.extend(_correlation_heatmap(frame, profiles, figures_dir, max_heatmap_columns))
     chart_meta.extend(_time_trend(frame, profiles, figures_dir))
     return chart_meta
 
@@ -50,19 +53,19 @@ def _missing_chart(frame: pd.DataFrame, figures_dir: Path) -> list[dict[str, Any
     path = figures_dir / "missing_values.png"
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    return [{"kind": "missing", "title": "Missing Value Rate by Column", "path": str(path)}]
+    return [{"kind": "missing", "title": "Missing Value Rate by Column", "path": str(path), "rendered": True}]
 
 
 def _numeric_histograms(
     frame: pd.DataFrame,
     profiles: list[ColumnProfile],
     figures_dir: Path,
+    max_numeric_charts: int,
 ) -> list[dict[str, Any]]:
     charts = []
-    for profile in profiles:
-        if profile.inferred_type != "numeric":
-            continue
-        values = pd.to_numeric(frame[profile.name], errors="coerce").dropna()
+    numeric_profiles = [profile for profile in profiles if profile.inferred_type == "numeric"]
+    for profile in numeric_profiles[:max_numeric_charts]:
+        values = coerce_numeric(frame[profile.name]).dropna()
         if values.empty:
             continue
         fig, ax = plt.subplots(figsize=(8, 5))
@@ -75,7 +78,17 @@ def _numeric_histograms(
         path = figures_dir / filename
         fig.savefig(path, dpi=150)
         plt.close(fig)
-        charts.append({"kind": "numeric_distribution", "title": f"Distribution of {profile.name}", "path": str(path)})
+        charts.append(
+            {
+                "kind": "numeric_distribution",
+                "title": f"Distribution of {profile.name}",
+                "path": str(path),
+                "rendered": True,
+            }
+        )
+    skipped = len(numeric_profiles) - max_numeric_charts
+    if skipped > 0:
+        charts.append(_skipped_chart("numeric_distribution", f"Skipped {skipped} numeric histograms due to chart limit."))
     return charts
 
 
@@ -84,11 +97,11 @@ def _categorical_bars(
     profiles: list[ColumnProfile],
     figures_dir: Path,
     max_categories: int,
+    max_categorical_charts: int,
 ) -> list[dict[str, Any]]:
     charts = []
-    for profile in profiles:
-        if profile.inferred_type not in {"categorical", "boolean"}:
-            continue
+    categorical_profiles = [profile for profile in profiles if profile.inferred_type in {"categorical", "boolean"}]
+    for profile in categorical_profiles[:max_categorical_charts]:
         counts = frame[profile.name].value_counts(dropna=True).head(max_categories)
         if counts.empty:
             continue
@@ -101,7 +114,17 @@ def _categorical_bars(
         path = figures_dir / filename
         fig.savefig(path, dpi=150)
         plt.close(fig)
-        charts.append({"kind": "categorical_top", "title": f"Top Categories of {profile.name}", "path": str(path)})
+        charts.append(
+            {
+                "kind": "categorical_top",
+                "title": f"Top Categories of {profile.name}",
+                "path": str(path),
+                "rendered": True,
+            }
+        )
+    skipped = len(categorical_profiles) - max_categorical_charts
+    if skipped > 0:
+        charts.append(_skipped_chart("categorical_top", f"Skipped {skipped} categorical bar charts due to chart limit."))
     return charts
 
 
@@ -109,11 +132,19 @@ def _correlation_heatmap(
     frame: pd.DataFrame,
     profiles: list[ColumnProfile],
     figures_dir: Path,
+    max_heatmap_columns: int,
 ) -> list[dict[str, Any]]:
     numeric_columns = [profile.name for profile in profiles if profile.inferred_type == "numeric"]
     if len(numeric_columns) < 2:
         return []
-    corr = frame[numeric_columns].apply(pd.to_numeric, errors="coerce").corr(numeric_only=True)
+    if len(numeric_columns) > max_heatmap_columns:
+        return [
+            _skipped_chart(
+                "correlation",
+                f"Skipped correlation heatmap for {len(numeric_columns)} numeric columns due to chart limit.",
+            )
+        ]
+    corr = frame[numeric_columns].apply(coerce_numeric).corr(numeric_only=True)
     fig, ax = plt.subplots(figsize=(max(6, len(numeric_columns)), max(5, len(numeric_columns) * 0.75)))
     image = ax.imshow(corr, cmap="RdBu_r", vmin=-1, vmax=1)
     ax.set_title("Numeric Correlation Heatmap")
@@ -124,7 +155,7 @@ def _correlation_heatmap(
     path = figures_dir / "correlation_heatmap.png"
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    return [{"kind": "correlation", "title": "Numeric Correlation Heatmap", "path": str(path)}]
+    return [{"kind": "correlation", "title": "Numeric Correlation Heatmap", "path": str(path), "rendered": True}]
 
 
 def _time_trend(
@@ -141,7 +172,7 @@ def _time_trend(
     numeric_col = numeric_columns[0]
     working = frame[[date_col, numeric_col]].copy()
     working[date_col] = pd.to_datetime(working[date_col], errors="coerce", format="mixed")
-    working[numeric_col] = pd.to_numeric(working[numeric_col], errors="coerce")
+    working[numeric_col] = coerce_numeric(working[numeric_col])
     working = working.dropna().sort_values(date_col)
     if working.empty:
         return []
@@ -157,7 +188,18 @@ def _time_trend(
     path = figures_dir / f"trend_{_safe_filename(date_col)}_{_safe_filename(numeric_col)}.png"
     fig.savefig(path, dpi=150)
     plt.close(fig)
-    return [{"kind": "time_trend", "title": f"Monthly Average {numeric_col} by {date_col}", "path": str(path)}]
+    return [
+        {
+            "kind": "time_trend",
+            "title": f"Monthly Average {numeric_col} by {date_col}",
+            "path": str(path),
+            "rendered": True,
+        }
+    ]
+
+
+def _skipped_chart(kind: str, title: str) -> dict[str, Any]:
+    return {"kind": kind, "title": title, "rendered": False, "reason": "chart_limit"}
 
 
 def _safe_filename(value: str) -> str:
