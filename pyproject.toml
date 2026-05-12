@@ -12,6 +12,7 @@ dependencies = [
   "pandas>=2.0",
   "matplotlib>=3.8",
   "httpx>=0.25",
+  "flask>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -21,9 +22,13 @@ dev = [
 
 [project.scripts]
 ai-data-analyst = "ai_data_analyst.cli:main"
+ai-data-analyst-web = "ai_data_analyst.web:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+ai_data_analyst = ["templates/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

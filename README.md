@@ -39,6 +39,18 @@ python3 analyze.py /path/to/your.csv
 python3 analyze.py /path/to/your.csv --target revenue
 ```
 
+## 网页版
+
+网页入口需要先安装依赖：
+
+```bash
+python3 -m pip install -e .
+ai-data-analyst-web
+```
+
+打开浏览器访问 `http://127.0.0.1:8000`，上传 CSV 就能分析。
+网页会在本地会话里保存一个简单的 CSRF token，并默认只接受本机来源请求。
+
 输出文件：
 
 - `reports/sales_sample-<hash>/report.md`

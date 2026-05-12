@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 数据分析助手</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f7f9fc; color: #102a43; }
+    header { padding: 24px 28px 12px; background: white; border-bottom: 1px solid #e6e8ef; }
+    main { max-width: 1100px; margin: 0 auto; padding: 24px 20px 40px; }
+    .panel { background: white; border: 1px solid #e6e8ef; border-radius: 10px; padding: 20px; margin-bottom: 20px; }
+    label { display: block; font-weight: 600; margin: 12px 0 6px; }
+    input[type="text"], input[type="number"], select, input[type="file"] { width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #cbd2d9; border-radius: 8px; background: white; }
+    .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .actions { margin-top: 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    button { border: 0; background: #1d4ed8; color: white; padding: 10px 16px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    button:hover { background: #1e40af; }
+    .error { background: #fff1f0; border: 1px solid #f5c2c7; color: #b42318; padding: 12px 14px; border-radius: 8px; margin-bottom: 16px; }
+    .result-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 16px; }
+    .cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .card { border: 1px solid #e6e8ef; border-radius: 10px; padding: 14px; background: #fcfdff; }
+    .muted { color: #627d98; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #e6e8ef; text-align: left; padding: 8px 6px; vertical-align: top; }
+    img { max-width: 100%; height: auto; border: 1px solid #e6e8ef; border-radius: 8px; background: white; }
+    .charts { display: grid; gap: 16px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #f7fafc; border: 1px solid #e6e8ef; padding: 14px; border-radius: 8px; }
+    a { color: #1d4ed8; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    @media (max-width: 900px) {
+      .row, .result-grid, .cards { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AI 数据分析助手</h1>
+    <div class="muted">上传 CSV，自动生成 EDA、图表和分析结论。</div>
+  </header>
+  <main>
+    {% if error %}
+      <div class="error">{{ error }}</div>
+    {% endif %}
+
+    <section class="panel">
+      <form action="/analyze" method="post" enctype="multipart/form-data" id="analysis-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="csv_file">CSV 文件</label>
+        <input id="csv_file" name="csv_file" type="file" accept=".csv,text/csv">
+
+        <label for="csv_text">或直接粘贴 CSV 内容</label>
+        <textarea id="csv_text" name="csv_text" rows="8" placeholder="a,b,c&#10;1,2,3"></textarea>
+        <div class="muted">如果填了文本，上传文件会被忽略。</div>
+
+        <div class="row">
+          <div>
+            <label for="target">目标列（可选）</label>
+            <input id="target" name="target" type="text" placeholder="例如 revenue" value="{{ defaults.last_target }}">
+          </div>
+          <div>
+            <label for="max_categories">类别 Top N</label>
+            <input id="max_categories" name="max_categories" type="number" min="1" value="10">
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="report_format">报告格式</label>
+            <select id="report_format" name="report_format">
+              <option value="both" {% if defaults.last_report_format == 'both' %}selected{% endif %}>Markdown + HTML</option>
+              <option value="markdown" {% if defaults.last_report_format == 'markdown' %}selected{% endif %}>Markdown</option>
+              <option value="html" {% if defaults.last_report_format == 'html' %}selected{% endif %}>HTML</option>
+            </select>
+          </div>
+          <div>
+            <label style="display:flex; gap:10px; align-items:center; margin-top: 32px;">
+              <input type="checkbox" name="use_llm" {% if defaults.last_use_llm %}checked{% endif %}>
+              启用 LLM
+            </label>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button type="submit">开始分析</button>
+          <span class="muted">默认离线，只有勾选 LLM 才会请求外部 API。</span>
+        </div>
+      </form>
+    </section>
+
+    {% if result %}
+      <section class="panel">
+        <h2>分析结果</h2>
+        <div class="cards">
+          <div class="card">
+            <div class="muted">输出目录</div>
+            <div>{{ result.output_dir }}</div>
+          </div>
+          <div class="card">
+            <div class="muted">概要文件</div>
+            <div><a href="{{ result.summary_url }}" target="_blank" rel="noreferrer">summary.json</a></div>
+          </div>
+          <div class="card">
+            <div class="muted">图表数量</div>
+            <div>{{ result.charts|length }}</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>结论</h2>
+        <pre>{{ result.insights.content }}</pre>
+      </section>
+
+      <section class="panel">
+        <h2>可视化</h2>
+        <div class="charts">
+          {% for chart in result.charts %}
+            {% if chart.rendered and chart.url %}
+              <figure>
+                <img src="{{ chart.url }}" alt="{{ chart.title }}">
+                <figcaption class="muted">{{ chart.title }}</figcaption>
+              </figure>
+            {% else %}
+              <div class="card">{{ chart.title }}</div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>报告下载</h2>
+        <ul>
+          {% for name, url in result.report_urls.items() %}
+            <li><a href="{{ url }}" target="_blank" rel="noreferrer">{{ name }}</a></li>
+          {% endfor %}
+          <li><a href="{{ result.summary_url }}" target="_blank" rel="noreferrer">summary.json</a></li>
+        </ul>
+      </section>
+    {% endif %}
+  </main>
+  <script>
+    (function () {
+      const form = document.getElementById('analysis-form');
+      const fileInput = document.getElementById('csv_file');
+      const textInput = document.getElementById('csv_text');
+
+      function syncRequiredState() {
+        const hasText = textInput.value.trim().length > 0;
+        const hasFile = fileInput.files && fileInput.files.length > 0;
+        fileInput.required = !hasText && !hasFile;
+        textInput.required = !hasFile && !hasText;
+      }
+
+      fileInput.addEventListener('change', syncRequiredState);
+      textInput.addEventListener('input', syncRequiredState);
+      form.addEventListener('submit', syncRequiredState);
+      syncRequiredState();
+    })();
+  </script>
+</body>
+</html>
