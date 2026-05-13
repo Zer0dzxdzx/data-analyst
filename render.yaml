@@ -14,9 +14,7 @@ services:
       - key: AI_ANALYST_SECRET_KEY
         generateValue: true
       - key: AI_ANALYST_REQUIRE_ACCESS_CODE
-        value: "1"
-      - key: AI_ANALYST_ACCESS_CODE
-        sync: false
+        value: "0"
       - key: AI_ANALYST_WEB_REPORTS_DIR
         value: /tmp/ai-data-analyst-reports
       - key: AI_ANALYST_MAX_UPLOAD_MB

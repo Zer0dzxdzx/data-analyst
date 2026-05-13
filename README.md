@@ -64,7 +64,7 @@ ai-data-analyst-web
 - 报告目录：`/tmp/ai-data-analyst-reports`
 - 临时保留：24 小时
 - LLM：默认关闭，不配置 `LLM_API_KEY`
-- 访问码：公网必须设置 `AI_ANALYST_ACCESS_CODE`；缺失时服务会 fail closed
+- 访问码：默认关闭，别人打开公网 URL 即可使用；如需私密试用可设置 `AI_ANALYST_REQUIRE_ACCESS_CODE=1` 和 `AI_ANALYST_ACCESS_CODE`
 
 Render 启动命令：
 
@@ -76,8 +76,7 @@ gunicorn 'ai_data_analyst.web:create_app()' --bind 0.0.0.0:$PORT --workers 1 --t
 
 ```bash
 AI_ANALYST_SECRET_KEY=<生成一个长随机字符串>
-AI_ANALYST_REQUIRE_ACCESS_CODE=1
-AI_ANALYST_ACCESS_CODE=<发给试用者的共享访问码>
+AI_ANALYST_REQUIRE_ACCESS_CODE=0
 AI_ANALYST_WEB_REPORTS_DIR=/tmp/ai-data-analyst-reports
 AI_ANALYST_MAX_UPLOAD_MB=10
 AI_ANALYST_RATE_LIMIT_PER_HOUR=20
@@ -93,7 +92,7 @@ MPLBACKEND=Agg
 ```
 
 `AI_ANALYST_TRUST_PROXY=1` 只应在 Render 这类可信反向代理后开启，用于正确识别公网 HTTPS Origin。
-启用 `AI_ANALYST_TRUST_PROXY=1` 时，如果没有配置 `AI_ANALYST_ACCESS_CODE`，应用会默认 fail closed。
+如果希望用访问码保护公网入口，请设置 `AI_ANALYST_REQUIRE_ACCESS_CODE=1` 和 `AI_ANALYST_ACCESS_CODE=<访问码>`。
 当前限流是单实例内存限流，适合 Render 免费实例的小范围试用；多实例或长期公开服务应升级到 Redis/托管限流。
 
 部署后可用 `examples/dashboard_test_sales.csv` 在线验收，目标列填写 `revenue`。报告下载链接包含临时 token，并带有 `no-store` 缓存头，仍然只建议发给可信试用者；原始 CSV 保存在 `_inputs/` 目录，不通过网页下载路由暴露。
