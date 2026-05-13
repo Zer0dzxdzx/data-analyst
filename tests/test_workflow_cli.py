@@ -65,6 +65,22 @@ class WorkflowCliTests(unittest.TestCase):
             self.assertTrue(skipped)
             self.assertTrue(any(chart["kind"] == "correlation" for chart in skipped))
 
+    def test_analyze_csv_rejects_row_limit_excess(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "rows.csv"
+            csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+
+            with self.assertRaises(DataLoadError):
+                analyze_csv(csv_path, AnalysisConfig(output_dir=Path(tmpdir) / "out", max_rows=1))
+
+    def test_analyze_csv_rejects_column_limit_excess(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "columns.csv"
+            csv_path.write_text("a,b,c\n1,2,3\n", encoding="utf-8")
+
+            with self.assertRaises(DataLoadError):
+                analyze_csv(csv_path, AnalysisConfig(output_dir=Path(tmpdir) / "out", max_columns=2))
+
     def test_summary_json_is_strict_json_and_markdown_escapes_columns(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             csv_path = Path(tmpdir) / "odd.csv"
@@ -101,6 +117,22 @@ class WorkflowCliTests(unittest.TestCase):
 
             self.assertEqual(list(frame.columns), ["a", "b"])
             self.assertEqual(frame.shape, (2, 2))
+
+    def test_load_csv_can_reject_before_reading_past_row_limit(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "limited.csv"
+            csv_path.write_text("a,b\n1,2\n3,4\n", encoding="utf-8")
+
+            with self.assertRaises(DataLoadError):
+                load_csv(csv_path, max_rows=1)
+
+    def test_load_csv_can_reject_column_limit(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            csv_path = Path(tmpdir) / "limited_columns.csv"
+            csv_path.write_text("a,b,c\n1,2,3\n", encoding="utf-8")
+
+            with self.assertRaises(DataLoadError):
+                load_csv(csv_path, max_columns=2)
 
 
 if __name__ == "__main__":

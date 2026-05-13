@@ -26,6 +26,116 @@ class WebAppTests(unittest.TestCase):
         self.assertIn('name="csrf_token"', response.get_data(as_text=True))
         self.assertIn('name="max_categories" type="number" min="1" max="50"', response.get_data(as_text=True))
 
+    def test_access_code_gate_hides_analysis_form_until_unlocked(self):
+        with patch.dict(os.environ, {"AI_ANALYST_ACCESS_CODE": "let-me-in"}):
+            app = create_app()
+        client = app.test_client()
+
+        response = client.get("/")
+        body = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("访问码", body)
+        self.assertNotIn('id="analysis-form"', body)
+
+    def test_required_access_code_without_code_fails_closed(self):
+        with patch.dict(os.environ, {"AI_ANALYST_REQUIRE_ACCESS_CODE": "1"}, clear=False):
+            with patch.dict(os.environ, {"AI_ANALYST_ACCESS_CODE": ""}, clear=False):
+                app = create_app()
+        client = app.test_client()
+
+        response = client.get("/")
+        health = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("服务未配置访问码", response.get_data(as_text=True))
+        self.assertEqual(health.status_code, 503)
+        self.assertEqual(health.get_json(), {"status": "misconfigured"})
+
+    def test_proxy_mode_without_access_code_fails_closed_by_default(self):
+        with patch.dict(os.environ, {"AI_ANALYST_TRUST_PROXY": "1"}, clear=False):
+            with patch.dict(os.environ, {"AI_ANALYST_ACCESS_CODE": ""}, clear=False):
+                app = create_app()
+        client = app.test_client()
+
+        response = client.get(
+            "/",
+            headers={
+                "Host": "data-analyst.onrender.com",
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "data-analyst.onrender.com",
+            },
+        )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("服务未配置访问码", response.get_data(as_text=True))
+
+    def test_access_code_unlock_allows_index(self):
+        with patch.dict(os.environ, {"AI_ANALYST_ACCESS_CODE": "let-me-in"}):
+            app = create_app()
+        client = app.test_client()
+        index_response = client.get("/")
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', index_response.get_data(as_text=True))
+        self.assertIsNotNone(csrf_match)
+
+        response = client.post(
+            "/",
+            data={"csrf_token": csrf_match.group(1), "access_code": "let-me-in"},
+            headers={"Origin": "http://localhost"},
+            follow_redirects=True,
+        )
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('id="analysis-form"', body)
+
+    def test_access_code_required_for_analyze(self):
+        with patch.dict(os.environ, {"AI_ANALYST_ACCESS_CODE": "let-me-in"}):
+            app = create_app()
+        client = app.test_client()
+
+        with client.session_transaction() as session:
+            session["ai_analyst_csrf"] = "token-access-required"
+
+        response = client.post(
+            "/analyze",
+            data={"csrf_token": "token-access-required", "csv_text": "a,b\n1,2\n"},
+            headers={"Origin": "http://localhost"},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("请输入访问码", response.get_data(as_text=True))
+
+    def test_access_code_attempts_are_rate_limited(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AI_ANALYST_ACCESS_CODE": "let-me-in",
+                "AI_ANALYST_ACCESS_ATTEMPT_LIMIT_PER_HOUR": "1",
+            },
+        ):
+            app = create_app()
+        client = app.test_client()
+        index_response = client.get("/")
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', index_response.get_data(as_text=True))
+        self.assertIsNotNone(csrf_match)
+
+        first = client.post(
+            "/",
+            data={"csrf_token": csrf_match.group(1), "access_code": "wrong"},
+            headers={"Origin": "http://localhost"},
+        )
+        second = client.post(
+            "/",
+            data={"csrf_token": csrf_match.group(1), "access_code": "wrong-again"},
+            headers={"Origin": "http://localhost"},
+        )
+
+        self.assertEqual(first.status_code, 403)
+        self.assertEqual(second.status_code, 429)
+        self.assertIn("访问码尝试太频繁", second.get_data(as_text=True))
+
     def test_healthz_returns_ok(self):
         app = create_app()
         client = app.test_client()
@@ -155,6 +265,56 @@ class WebAppTests(unittest.TestCase):
         self.assertFalse(captured["use_llm"])
         self.assertIn("公网离线模式", body)
 
+    def test_web_resource_limits_are_passed_to_analysis_config(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AI_ANALYST_MAX_ROWS": "250",
+                "AI_ANALYST_MAX_COLUMNS": "30",
+                "AI_ANALYST_MAX_CORRELATION_COLUMNS": "12",
+            },
+        ):
+            app = create_app()
+        client = app.test_client()
+        captured = {}
+
+        with client.session_transaction() as session:
+            session["ai_analyst_csrf"] = "token-resource-limits"
+
+        def fake_analyze_csv(csv_path, config):
+            captured["max_rows"] = config.max_rows
+            captured["max_columns"] = config.max_columns
+            captured["max_correlation_columns"] = config.max_correlation_columns
+            output_dir = Path(csv_path).parent.parent
+            summary_path = output_dir / "summary.json"
+            summary_path.write_text("{}", encoding="utf-8")
+            report_path = output_dir / "report.md"
+            report_path.write_text("# report", encoding="utf-8")
+            return SimpleNamespace(
+                output_dir=output_dir,
+                summary_path=summary_path,
+                report_paths={"markdown": report_path},
+                charts=[],
+                insights={"mode": "fallback", "content": "ok"},
+                eda_summary={"shape": {"rows": 1, "columns": 2}},
+            )
+
+        with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
+            response = client.post(
+                "/analyze",
+                data={
+                    "csrf_token": "token-resource-limits",
+                    "csv_text": "a,b\n1,2\n",
+                    "report_format": "markdown",
+                    "max_categories": "5",
+                },
+                headers={"Origin": "http://localhost"},
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured, {"max_rows": 250, "max_columns": 30, "max_correlation_columns": 12})
+
     def test_llm_is_disabled_by_default_for_web(self):
         app = create_app()
         client = app.test_client()
@@ -215,6 +375,25 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(app.config["WEB_RETENTION_HOURS"], 24)
         self.assertFalse(app.config["WEB_ALLOW_LLM"])
 
+    def test_proxy_mode_uses_forwarded_for_and_secure_cookie(self):
+        with patch.dict(os.environ, {"AI_ANALYST_TRUST_PROXY": "1", "AI_ANALYST_ACCESS_CODE": "let-me-in"}):
+            app = create_app()
+        client = app.test_client()
+
+        self.assertTrue(app.config["SESSION_COOKIE_SECURE"])
+        response = client.get(
+            "/",
+            headers={
+                "Host": "data-analyst.onrender.com",
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "data-analyst.onrender.com",
+                "X-Forwarded-For": "203.0.113.7",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Secure", response.headers.get("Set-Cookie", ""))
+
     def test_analyze_upload_returns_result_page(self):
         app = create_app()
         client = app.test_client()
@@ -244,21 +423,30 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("/runs/", body)
         self.assertIn("summary.json", body)
         self.assertNotIn(str(ROOT), body)
+        self.assertIn("no-store", response.headers.get("Cache-Control", ""))
+        self.assertEqual(response.headers.get("Referrer-Policy"), "no-referrer")
 
     def test_analyze_accepts_https_origin_behind_proxy(self):
-        with patch.dict(os.environ, {"AI_ANALYST_TRUST_PROXY": "1"}):
+        with patch.dict(os.environ, {"AI_ANALYST_TRUST_PROXY": "1", "AI_ANALYST_ACCESS_CODE": "let-me-in"}):
             app = create_app()
         client = app.test_client()
         captured = {}
         proxy_headers = {
-            "Host": "data-analyst.onrender.com",
             "X-Forwarded-Proto": "https",
             "X-Forwarded-Host": "data-analyst.onrender.com",
         }
-        index_response = client.get("/", headers=proxy_headers)
+        index_response = client.get("/", base_url="https://data-analyst.onrender.com", headers=proxy_headers)
         csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', index_response.get_data(as_text=True))
         self.assertIsNotNone(csrf_match)
-        csrf_token = csrf_match.group(1)
+        unlock_response = client.post(
+            "/",
+            base_url="https://data-analyst.onrender.com",
+            data={"csrf_token": csrf_match.group(1), "access_code": "let-me-in"},
+            headers={**proxy_headers, "Origin": "https://data-analyst.onrender.com"},
+            follow_redirects=True,
+        )
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', unlock_response.get_data(as_text=True))
+        self.assertIsNotNone(csrf_match)
 
         def fake_analyze_csv(csv_path, config):
             captured["called"] = True
@@ -279,8 +467,9 @@ class WebAppTests(unittest.TestCase):
         with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
             response = client.post(
                 "/analyze",
+                base_url="https://data-analyst.onrender.com",
                 data={
-                    "csrf_token": csrf_token,
+                    "csrf_token": csrf_match.group(1),
                     "csv_text": "a,b\n1,2\n",
                     "report_format": "markdown",
                     "max_categories": "5",
@@ -321,6 +510,53 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("报告下载", body)
         self.assertIn("summary.json", body)
         self.assertNotIn(str(ROOT), body)
+
+    def test_rate_limit_rejects_repeated_analysis_requests(self):
+        with patch.dict(os.environ, {"AI_ANALYST_RATE_LIMIT_PER_HOUR": "1"}):
+            app = create_app()
+        client = app.test_client()
+
+        with client.session_transaction() as session:
+            session["ai_analyst_csrf"] = "token-rate-limit"
+
+        def fake_analyze_csv(csv_path, config):
+            output_dir = Path(csv_path).parent.parent
+            summary_path = output_dir / "summary.json"
+            summary_path.write_text("{}", encoding="utf-8")
+            report_path = output_dir / "report.md"
+            report_path.write_text("# report", encoding="utf-8")
+            return SimpleNamespace(
+                output_dir=output_dir,
+                summary_path=summary_path,
+                report_paths={"markdown": report_path},
+                charts=[],
+                insights={"mode": "fallback", "content": "ok"},
+                eda_summary={"shape": {"rows": 1, "columns": 2}},
+            )
+
+        payload = {
+            "csrf_token": "token-rate-limit",
+            "csv_text": "a,b\n1,2\n",
+            "report_format": "markdown",
+            "max_categories": "5",
+        }
+        with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
+            first = client.post(
+                "/analyze",
+                data=payload,
+                headers={"Origin": "http://localhost"},
+                content_type="multipart/form-data",
+            )
+            second = client.post(
+                "/analyze",
+                data=payload,
+                headers={"Origin": "http://localhost"},
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertIn("请求太频繁", second.get_data(as_text=True))
 
     def test_analyze_clamps_large_max_categories_for_web_requests(self):
         app = create_app()
@@ -427,10 +663,15 @@ class WebAppTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        run_id = self._extract_run_id(response.get_data(as_text=True))
-        with client.get(f"/runs/{run_id}/summary.json") as artifact_response:
+        run_id, token = self._extract_run_link_parts(response.get_data(as_text=True))
+        with client.get(f"/runs/{run_id}/{token}/summary.json") as artifact_response:
             self.assertEqual(artifact_response.status_code, 200)
+            self.assertIn("no-store", artifact_response.headers.get("Cache-Control", ""))
+            self.assertEqual(artifact_response.headers.get("Referrer-Policy"), "no-referrer")
+        self.assertEqual(client.get(f"/runs/{run_id}/summary.json").status_code, 404)
+        self.assertEqual(client.get(f"/runs/{run_id}/wrong-token/summary.json").status_code, 404)
         self.assertEqual(client.get(f"/runs/{run_id}/_inputs/pasted.csv").status_code, 404)
+        self.assertEqual(client.get(f"/runs/{run_id}/{token}/_inputs/pasted.csv").status_code, 404)
         self.assertEqual(client.get(f"/runs/{run_id}/pasted.csv").status_code, 404)
 
     def test_artifacts_do_not_expose_raw_uploaded_csv(self):
@@ -453,10 +694,11 @@ class WebAppTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        run_id = self._extract_run_id(response.get_data(as_text=True))
-        with client.get(f"/runs/{run_id}/summary.json") as artifact_response:
+        run_id, token = self._extract_run_link_parts(response.get_data(as_text=True))
+        with client.get(f"/runs/{run_id}/{token}/summary.json") as artifact_response:
             self.assertEqual(artifact_response.status_code, 200)
         self.assertEqual(client.get(f"/runs/{run_id}/_inputs/private_sales.csv").status_code, 404)
+        self.assertEqual(client.get(f"/runs/{run_id}/{token}/_inputs/private_sales.csv").status_code, 404)
         self.assertEqual(client.get(f"/runs/{run_id}/private_sales.csv").status_code, 404)
 
     def test_artifacts_reject_invalid_run_ids(self):
@@ -469,8 +711,9 @@ class WebAppTests(unittest.TestCase):
                 app = create_app()
             client = app.test_client()
 
+            self.assertEqual(client.get("/runs/not-a-run-id/token/summary.json").status_code, 404)
+            self.assertEqual(client.get("/runs/..%2F..%2Ftmp/token/summary.json").status_code, 404)
             self.assertEqual(client.get("/runs/not-a-run-id/summary.json").status_code, 404)
-            self.assertEqual(client.get("/runs/..%2F..%2Ftmp/summary.json").status_code, 404)
 
     def test_artifact_allowlist_accepts_figures_png_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -487,11 +730,66 @@ class WebAppTests(unittest.TestCase):
             with patch.dict(os.environ, {"AI_ANALYST_WEB_REPORTS_DIR": tmp}):
                 app = create_app()
             client = app.test_client()
+            token = "artifact-token"
+            (run_dir / ".artifact-token").write_text(token, encoding="utf-8")
 
-            with client.get(f"/runs/{run_id}/figures/chart.png") as artifact_response:
+            with client.get(f"/runs/{run_id}/{token}/figures/chart.png") as artifact_response:
                 self.assertEqual(artifact_response.status_code, 200)
-            self.assertEqual(client.get(f"/runs/{run_id}/figures/chart.svg").status_code, 404)
-            self.assertEqual(client.get(f"/runs/{run_id}/figures/nested/chart.png").status_code, 404)
+            self.assertEqual(client.get(f"/runs/{run_id}/{token}/figures/chart.svg").status_code, 404)
+            self.assertEqual(client.get(f"/runs/{run_id}/{token}/figures/nested/chart.png").status_code, 404)
+
+    def test_artifacts_fail_closed_when_access_code_is_required_but_missing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_id = "012345abcdef"
+            token = "artifact-token"
+            run_dir = Path(tmp) / run_id
+            run_dir.mkdir()
+            (run_dir / ".artifact-token").write_text(token, encoding="utf-8")
+            (run_dir / "summary.json").write_text("{}", encoding="utf-8")
+
+            with patch.dict(
+                os.environ,
+                {
+                    "AI_ANALYST_WEB_REPORTS_DIR": tmp,
+                    "AI_ANALYST_TRUST_PROXY": "1",
+                    "AI_ANALYST_ACCESS_CODE": "",
+                },
+                clear=False,
+            ):
+                app = create_app()
+            client = app.test_client()
+
+            with client.session_transaction() as session:
+                session["ai_analyst_access_granted"] = True
+
+            response = client.get(f"/runs/{run_id}/{token}/summary.json")
+
+            self.assertEqual(response.status_code, 404)
+
+    def test_unexpected_analysis_errors_return_friendly_message(self):
+        app = create_app()
+        client = app.test_client()
+
+        with client.session_transaction() as session:
+            session["ai_analyst_csrf"] = "token-runtime-error"
+
+        with patch("ai_data_analyst.web.analyze_csv", side_effect=RuntimeError("disk failed /private/path")):
+            response = client.post(
+                "/analyze",
+                data={
+                    "csrf_token": "token-runtime-error",
+                    "csv_text": "a,b\n1,2\n",
+                    "report_format": "markdown",
+                    "max_categories": "5",
+                },
+                headers={"Origin": "http://localhost"},
+                content_type="multipart/form-data",
+            )
+
+        body = response.get_data(as_text=True)
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("分析失败", body)
+        self.assertNotIn("/private/path", body)
 
     def test_analyze_rejects_missing_csrf_token(self):
         app = create_app()
@@ -638,10 +936,10 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Invalid request origin or CSRF token", response.get_data(as_text=True))
 
-    def _extract_run_id(self, body: str) -> str:
-        match = re.search(r"/runs/([0-9a-f]{12})/summary\.json", body)
+    def _extract_run_link_parts(self, body: str) -> tuple[str, str]:
+        match = re.search(r"/runs/([0-9a-f]{12})/([^/]+)/summary\.json", body)
         self.assertIsNotNone(match)
-        return match.group(1)
+        return match.group(1), match.group(2)
 
 
 if __name__ == "__main__":

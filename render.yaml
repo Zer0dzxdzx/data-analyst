@@ -3,8 +3,8 @@ services:
     name: data-analyst
     runtime: python
     plan: free
-    buildCommand: python -m pip install -e .
-    startCommand: gunicorn 'ai_data_analyst.web:create_app()' --bind 0.0.0.0:$PORT --workers 1 --timeout 180
+    buildCommand: python -m pip install -r requirements.txt && python -m pip install -e . --no-deps
+    startCommand: gunicorn 'ai_data_analyst.web:create_app()' --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120
     healthCheckPath: /healthz
     envVars:
       - key: PYTHON_VERSION
@@ -13,13 +13,29 @@ services:
         value: Agg
       - key: AI_ANALYST_SECRET_KEY
         generateValue: true
+      - key: AI_ANALYST_REQUIRE_ACCESS_CODE
+        value: "1"
+      - key: AI_ANALYST_ACCESS_CODE
+        sync: false
       - key: AI_ANALYST_WEB_REPORTS_DIR
         value: /tmp/ai-data-analyst-reports
       - key: AI_ANALYST_MAX_UPLOAD_MB
         value: "10"
+      - key: AI_ANALYST_RATE_LIMIT_PER_HOUR
+        value: "20"
+      - key: AI_ANALYST_ACCESS_ATTEMPT_LIMIT_PER_HOUR
+        value: "10"
+      - key: AI_ANALYST_MAX_ROWS
+        value: "100000"
+      - key: AI_ANALYST_MAX_COLUMNS
+        value: "100"
+      - key: AI_ANALYST_MAX_CORRELATION_COLUMNS
+        value: "30"
       - key: AI_ANALYST_RETENTION_HOURS
         value: "24"
       - key: AI_ANALYST_WEB_ALLOW_LLM
         value: "0"
       - key: AI_ANALYST_TRUST_PROXY
+        value: "1"
+      - key: AI_ANALYST_SESSION_COOKIE_SECURE
         value: "1"

@@ -8,11 +8,11 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from secrets import token_urlsafe
+from secrets import compare_digest, token_urlsafe
 from typing import Any
 from urllib.parse import urlsplit
 
-from flask import Flask, abort, render_template, request, send_from_directory, session, url_for
+from flask import Flask, abort, redirect, render_template, request, send_from_directory, session, url_for
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -27,6 +27,14 @@ WEB_DEFAULT_CATEGORIES = 10
 WEB_MAX_CATEGORIES_DIGITS = 12
 DEFAULT_WEB_MAX_UPLOAD_MB = 20
 DEFAULT_WEB_RETENTION_HOURS = 24
+DEFAULT_WEB_RATE_LIMIT_PER_HOUR = 20
+DEFAULT_WEB_ACCESS_ATTEMPT_LIMIT_PER_HOUR = 10
+DEFAULT_WEB_MAX_ROWS = 100_000
+DEFAULT_WEB_MAX_COLUMNS = 100
+DEFAULT_WEB_MAX_CORRELATION_COLUMNS = 30
+RATE_LIMIT_WINDOW_SECONDS = 60 * 60
+ACCESS_SESSION_KEY = "ai_analyst_access_granted"
+ARTIFACT_TOKEN_FILE = ".artifact-token"
 
 
 @dataclass(slots=True)
@@ -46,15 +54,46 @@ def create_app() -> Flask:
     max_upload_mb = _env_int("AI_ANALYST_MAX_UPLOAD_MB", DEFAULT_WEB_MAX_UPLOAD_MB, minimum=1)
     retention_hours = _env_int("AI_ANALYST_RETENTION_HOURS", DEFAULT_WEB_RETENTION_HOURS, minimum=0)
     app.config["MAX_CONTENT_LENGTH"] = max_upload_mb * 1024 * 1024
-    app.config["SECRET_KEY"] = os.getenv("AI_ANALYST_SECRET_KEY", "dev-only-secret")
+    app.config["SECRET_KEY"] = os.getenv("AI_ANALYST_SECRET_KEY") or token_urlsafe(32)
     app.config["WEB_REPORTS_DIR"] = Path(
         os.getenv("AI_ANALYST_WEB_REPORTS_DIR", PROJECT_ROOT / "reports" / "web")
     ).expanduser().resolve()
     app.config["WEB_MAX_UPLOAD_MB"] = max_upload_mb
     app.config["WEB_RETENTION_HOURS"] = retention_hours
     app.config["WEB_ALLOW_LLM"] = _env_bool("AI_ANALYST_WEB_ALLOW_LLM", default=False)
-    if _env_bool("AI_ANALYST_TRUST_PROXY", default=False):
-        app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
+    app.config["WEB_ACCESS_CODE"] = os.getenv("AI_ANALYST_ACCESS_CODE", "").strip()
+    trust_proxy = _env_bool("AI_ANALYST_TRUST_PROXY", default=False)
+    app.config["WEB_REQUIRE_ACCESS_CODE"] = _env_bool("AI_ANALYST_REQUIRE_ACCESS_CODE", default=trust_proxy)
+    app.config["WEB_RATE_LIMIT_PER_HOUR"] = _env_int(
+        "AI_ANALYST_RATE_LIMIT_PER_HOUR",
+        DEFAULT_WEB_RATE_LIMIT_PER_HOUR,
+        minimum=0,
+    )
+    app.config["WEB_ACCESS_ATTEMPT_LIMIT_PER_HOUR"] = _env_int(
+        "AI_ANALYST_ACCESS_ATTEMPT_LIMIT_PER_HOUR",
+        DEFAULT_WEB_ACCESS_ATTEMPT_LIMIT_PER_HOUR,
+        minimum=0,
+    )
+    app.config["WEB_RATE_LIMIT_STATE"] = {}
+    app.config["WEB_MAX_ROWS"] = _env_int("AI_ANALYST_MAX_ROWS", DEFAULT_WEB_MAX_ROWS, minimum=1)
+    app.config["WEB_MAX_COLUMNS"] = _env_int("AI_ANALYST_MAX_COLUMNS", DEFAULT_WEB_MAX_COLUMNS, minimum=1)
+    app.config["WEB_MAX_CORRELATION_COLUMNS"] = _env_int(
+        "AI_ANALYST_MAX_CORRELATION_COLUMNS",
+        DEFAULT_WEB_MAX_CORRELATION_COLUMNS,
+        minimum=2,
+    )
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+    app.config["SESSION_COOKIE_SECURE"] = _env_bool("AI_ANALYST_SESSION_COOKIE_SECURE", default=trust_proxy)
+    if trust_proxy:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+
+    @app.after_request
+    def add_security_headers(response):
+        response.headers["Cache-Control"] = "private, no-store"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     @app.before_request
     def cleanup_expired_runs() -> None:
@@ -63,7 +102,9 @@ def create_app() -> Flask:
         _cleanup_expired_runs(app)
 
     @app.get("/healthz")
-    def healthz() -> dict[str, str]:
+    def healthz():
+        if _access_misconfigured(app):
+            return {"status": "misconfigured"}, 503
         return {"status": "ok"}
 
     @app.errorhandler(RequestEntityTooLarge)
@@ -72,16 +113,42 @@ def create_app() -> Flask:
         return _render_index(error=f"CSV 文件过大。最大 {limit}MB。"), 413
 
     @app.get("/")
-    def index() -> str:
+    def index():
+        if _access_misconfigured(app):
+            return _render_index(error=_access_configuration_error()), 503
         return _render_index()
+
+    @app.post("/")
+    def unlock_access():
+        if _access_misconfigured(app):
+            return _render_index(error=_access_configuration_error()), 503
+        if not _access_required(app):
+            return redirect(url_for("index"))
+        if not _check_csrf():
+            return _render_index(error="Invalid request origin or CSRF token."), 400
+        if not _check_rate_limit(app, bucket="access", limit_config="WEB_ACCESS_ATTEMPT_LIMIT_PER_HOUR"):
+            return _render_index(error="访问码尝试太频繁，请稍后再试。"), 429
+        if _access_code_matches(app, request.form.get("access_code", "")):
+            session[ACCESS_SESSION_KEY] = True
+            return redirect(url_for("index"))
+        return _render_index(error="访问码不正确，请重新输入。"), 403
 
     @app.post("/analyze")
     def analyze() -> str:
         if not _check_csrf():
             return _render_index(error="Invalid request origin or CSRF token."), 400
+        if _access_misconfigured(app):
+            return _render_index(error=_access_configuration_error()), 503
+        if not _has_access(app):
+            return _render_index(error="请输入访问码后再上传分析。"), 403
+        if not _check_rate_limit(app, bucket="analysis", limit_config="WEB_RATE_LIMIT_PER_HOUR"):
+            return _render_index(error="请求太频繁，请稍后再试。"), 429
 
         uploaded = request.files.get("csv_file")
         form = _parse_analyze_form(app)
+        if _csv_text_too_large(app, form.csv_text):
+            limit = app.config["WEB_MAX_UPLOAD_MB"]
+            return _render_index(error=f"CSV 文本过大。最大 {limit}MB。"), 413
 
         if form.csv_text and uploaded and uploaded.filename:
             return _render_index(error="Please provide either a CSV file or pasted CSV text, not both."), 400
@@ -109,14 +176,25 @@ def create_app() -> Flask:
                     max_categories=form.max_categories,
                     use_llm=form.use_llm,
                     report_format=form.report_format,
+                    max_rows=app.config["WEB_MAX_ROWS"],
+                    max_columns=app.config["WEB_MAX_COLUMNS"],
+                    max_correlation_columns=app.config["WEB_MAX_CORRELATION_COLUMNS"],
                 ),
             )
         except AnalysisError as exc:
+            shutil.rmtree(run_dir, ignore_errors=True)
             return _analysis_error_response(exc)
         except ValueError as exc:
+            shutil.rmtree(run_dir, ignore_errors=True)
             return _analysis_error_response(exc)
+        except Exception:
+            app.logger.exception("Unexpected analysis failure for run %s", run_id)
+            shutil.rmtree(run_dir, ignore_errors=True)
+            return _render_index(error="分析失败。请检查 CSV 后重试；如果问题持续出现，请稍后再试。"), 500
 
-        preview = _build_preview(app, run_id, result)
+        artifact_token = token_urlsafe(18)
+        _write_artifact_token(run_dir, artifact_token)
+        preview = _build_preview(app, run_id, result, artifact_token)
         return _render_index(
             result=preview,
             defaults={
@@ -127,14 +205,22 @@ def create_app() -> Flask:
             },
         )
 
-    @app.get("/runs/<run_id>/<path:filename>")
-    def artifact(run_id: str, filename: str) -> Any:
+    @app.get("/runs/<run_id>/<token>/<path:filename>")
+    def artifact(run_id: str, token: str, filename: str) -> Any:
+        if _access_misconfigured(app):
+            abort(404)
+        if not _has_access(app):
+            abort(404)
         if not _is_valid_run_id(run_id):
             abort(404)
         run_dir = _run_dir(app, run_id)
-        if not run_dir.exists() or not _is_allowed_artifact(filename):
+        if not run_dir.exists() or not _is_allowed_artifact(filename) or not _artifact_token_matches(run_dir, token):
             abort(404)
         return send_from_directory(run_dir, filename, as_attachment=False)
+
+    @app.get("/runs/<run_id>/<path:filename>")
+    def legacy_artifact(run_id: str, filename: str) -> Any:
+        abort(404)
 
     return app
 
@@ -147,17 +233,17 @@ def main() -> int:
     return 0
 
 
-def _build_preview(app: Flask, run_id: str, result) -> dict[str, Any]:
+def _build_preview(app: Flask, run_id: str, result, artifact_token: str) -> dict[str, Any]:
     report_paths = {
-        name: _artifact_url(app, run_id, result.output_dir, path)
+        name: _artifact_url(app, run_id, artifact_token, result.output_dir, path)
         for name, path in result.report_paths.items()
     }
-    summary_url = _artifact_url(app, run_id, result.output_dir, result.summary_path)
+    summary_url = _artifact_url(app, run_id, artifact_token, result.output_dir, result.summary_path)
     charts = []
     for chart in result.charts:
         url = None
         if chart.get("rendered", True) and chart.get("path"):
-            url = _artifact_url(app, run_id, result.output_dir, Path(chart["path"]))
+            url = _artifact_url(app, run_id, artifact_token, result.output_dir, Path(chart["path"]))
         charts.append(
             {
                 "title": chart.get("title"),
@@ -214,11 +300,19 @@ def _web_settings() -> dict[str, Any]:
     from flask import current_app
 
     retention_hours = int(current_app.config.get("WEB_RETENTION_HOURS", DEFAULT_WEB_RETENTION_HOURS))
+    access_enabled = _access_required(current_app)
     return {
         "allow_llm": bool(current_app.config.get("WEB_ALLOW_LLM", True)),
         "max_upload_mb": int(current_app.config.get("WEB_MAX_UPLOAD_MB", DEFAULT_WEB_MAX_UPLOAD_MB)),
         "retention_hours": retention_hours,
         "retention_label": _retention_label(retention_hours),
+        "access_enabled": access_enabled,
+        "access_required": access_enabled and not _has_access(current_app),
+        "max_rows": int(current_app.config.get("WEB_MAX_ROWS", DEFAULT_WEB_MAX_ROWS)),
+        "max_columns": int(current_app.config.get("WEB_MAX_COLUMNS", DEFAULT_WEB_MAX_COLUMNS)),
+        "rate_limit_per_hour": int(
+            current_app.config.get("WEB_RATE_LIMIT_PER_HOUR", DEFAULT_WEB_RATE_LIMIT_PER_HOUR)
+        ),
     }
 
 
@@ -240,6 +334,8 @@ def _public_error_message(exc: Exception) -> str:
         return "CSV has no columns."
     if "no data rows" in message.lower():
         return "CSV has columns but no data rows."
+    if "too many rows" in message.lower() or "too many columns" in message.lower():
+        return message
     return "Could not analyze the CSV. Please check the file and try again."
 
 
@@ -324,11 +420,11 @@ def _cleanup_expired_runs(app: Flask) -> None:
             continue
 
 
-def _artifact_url(app: Flask, run_id: str, output_dir: Path, path: Path) -> str:
+def _artifact_url(app: Flask, run_id: str, token: str, output_dir: Path, path: Path) -> str:
     relative = Path(path).resolve().relative_to(output_dir.resolve()).as_posix()
     if not _is_allowed_artifact(relative):
         raise ValueError(f"Artifact is not web-accessible: {relative}")
-    return url_for("artifact", run_id=run_id, filename=relative)
+    return url_for("artifact", run_id=run_id, token=token, filename=relative)
 
 
 def _is_allowed_artifact(filename: str) -> bool:
@@ -342,6 +438,69 @@ def _is_allowed_artifact(filename: str) -> bool:
     if len(path.parts) == 2 and path.parts[0] == "figures":
         return path.suffix.lower() == ".png"
     return False
+
+
+def _write_artifact_token(run_dir: Path, token: str) -> None:
+    (run_dir / ARTIFACT_TOKEN_FILE).write_text(token, encoding="utf-8")
+
+
+def _artifact_token_matches(run_dir: Path, submitted: str) -> bool:
+    try:
+        expected = (run_dir / ARTIFACT_TOKEN_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return bool(submitted and expected and compare_digest(expected, submitted))
+
+
+def _access_required(app: Flask) -> bool:
+    return bool(app.config.get("WEB_REQUIRE_ACCESS_CODE")) or bool(str(app.config.get("WEB_ACCESS_CODE", "")).strip())
+
+
+def _access_misconfigured(app: Flask) -> bool:
+    return bool(app.config.get("WEB_REQUIRE_ACCESS_CODE")) and not str(app.config.get("WEB_ACCESS_CODE", "")).strip()
+
+
+def _access_configuration_error() -> str:
+    return "服务未配置访问码。请设置 AI_ANALYST_ACCESS_CODE 后再开放公网访问。"
+
+
+def _has_access(app: Flask) -> bool:
+    if not _access_required(app):
+        return True
+    return bool(session.get(ACCESS_SESSION_KEY))
+
+
+def _access_code_matches(app: Flask, submitted: str) -> bool:
+    expected = str(app.config.get("WEB_ACCESS_CODE", "")).strip()
+    return bool(submitted and expected and compare_digest(expected, submitted.strip()))
+
+
+def _csv_text_too_large(app: Flask, csv_text: str) -> bool:
+    if not csv_text:
+        return False
+    max_bytes = int(app.config["WEB_MAX_UPLOAD_MB"]) * 1024 * 1024
+    return len(csv_text.encode("utf-8")) > max_bytes
+
+
+def _check_rate_limit(app: Flask, bucket: str, limit_config: str) -> bool:
+    limit = int(app.config.get(limit_config, DEFAULT_WEB_RATE_LIMIT_PER_HOUR))
+    if limit <= 0:
+        return True
+    state: dict[str, list[float]] = app.config["WEB_RATE_LIMIT_STATE"]
+    now = time.time()
+    cutoff = now - RATE_LIMIT_WINDOW_SECONDS
+    client = f"{bucket}:{_client_key()}"
+    attempts = [stamp for stamp in state.get(client, []) if stamp >= cutoff]
+    if len(attempts) >= limit:
+        state[client] = attempts
+        return False
+    attempts.append(now)
+    state[client] = attempts
+    return True
+
+
+def _client_key() -> str:
+    return request.remote_addr or "local"
 
 
 def _csrf_token() -> str:
@@ -364,7 +523,7 @@ def _check_csrf() -> bool:
     session_token = session.get("ai_analyst_csrf", "")
     if not session_token or not form_token:
         return False
-    return session_token == form_token
+    return compare_digest(str(session_token), str(form_token))
 
 
 def _same_origin(candidate: str, expected: str) -> bool:

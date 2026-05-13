@@ -63,6 +63,17 @@ class EdaSummaryTests(unittest.TestCase):
         self.assertEqual(summary["categorical"], {})
         self.assertEqual(summary["correlation"], {"matrix": {}, "strong_pairs": []})
 
+    def test_correlation_summary_respects_column_cap(self):
+        frame = pd.DataFrame({f"n{i}": [1, 2, 3, 4] for i in range(5)})
+        profiles = profile_dataframe(frame)
+        summary = build_eda_summary(frame, profiles, max_correlation_columns=3)
+
+        correlation = summary["correlation"]
+        self.assertTrue(correlation["truncated"])
+        self.assertEqual(correlation["total_numeric_columns"], 5)
+        self.assertEqual(correlation["included_columns"], ["n0", "n1", "n2"])
+        self.assertEqual(set(correlation["matrix"]), {"n0", "n1", "n2"})
+
 
 if __name__ == "__main__":
     unittest.main()

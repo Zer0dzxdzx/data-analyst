@@ -15,6 +15,7 @@ def build_eda_summary(
     frame: pd.DataFrame,
     profiles: list[ColumnProfile],
     max_categories: int = 10,
+    max_correlation_columns: int = 30,
 ) -> dict[str, Any]:
     """Build serializable EDA statistics for reporting."""
 
@@ -29,7 +30,7 @@ def build_eda_summary(
         "numeric": _numeric_summary(frame, numeric_columns),
         "categorical": _categorical_summary(frame, categorical_columns, max_categories),
         "datetime": _datetime_summary(frame, datetime_columns),
-        "correlation": _correlation_summary(frame, numeric_columns),
+        "correlation": _correlation_summary(frame, numeric_columns, max_correlation_columns),
         "column_type_counts": _column_type_counts(profiles),
     }
 
@@ -114,10 +115,11 @@ def _datetime_summary(frame: pd.DataFrame, columns: list[str]) -> dict[str, Any]
     return result
 
 
-def _correlation_summary(frame: pd.DataFrame, columns: list[str]) -> dict[str, Any]:
+def _correlation_summary(frame: pd.DataFrame, columns: list[str], max_columns: int) -> dict[str, Any]:
     if len(columns) < 2:
         return {"matrix": {}, "strong_pairs": []}
-    numeric_frame = frame[columns].apply(coerce_numeric).replace([np.inf, -np.inf], np.nan)
+    included_columns = columns[:max_columns]
+    numeric_frame = frame[included_columns].apply(coerce_numeric).replace([np.inf, -np.inf], np.nan)
     corr = numeric_frame.corr(numeric_only=True)
     matrix = {
         str(index): {str(column): _safe_float(value) for column, value in row.items()}
@@ -130,7 +132,13 @@ def _correlation_summary(frame: pd.DataFrame, columns: list[str]) -> dict[str, A
             if pd.notna(value) and abs(float(value)) >= 0.5:
                 pairs.append({"columns": [str(left), str(right)], "correlation": round(float(value), 4)})
     pairs.sort(key=lambda item: abs(item["correlation"]), reverse=True)
-    return {"matrix": matrix, "strong_pairs": pairs}
+    return {
+        "matrix": matrix,
+        "strong_pairs": pairs,
+        "truncated": len(columns) > len(included_columns),
+        "total_numeric_columns": len(columns),
+        "included_columns": [str(column) for column in included_columns],
+    }
 
 
 def _column_type_counts(profiles: list[ColumnProfile]) -> dict[str, int]:

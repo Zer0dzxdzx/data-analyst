@@ -11,7 +11,7 @@ from ai_data_analyst.exceptions import DataLoadError
 DEFAULT_ENCODINGS = ("utf-8-sig", "utf-8", "gb18030", "latin1")
 
 
-def load_csv(path: str | Path) -> pd.DataFrame:
+def load_csv(path: str | Path, max_rows: int | None = None, max_columns: int | None = None) -> pd.DataFrame:
     """Load a CSV with common encoding fallbacks and validation."""
 
     csv_path = Path(path).expanduser()
@@ -23,9 +23,16 @@ def load_csv(path: str | Path) -> pd.DataFrame:
         raise DataLoadError(f"CSV file is empty: {csv_path}")
 
     errors: list[str] = []
+    nrows = max_rows + 1 if max_rows is not None else None
     for encoding in DEFAULT_ENCODINGS:
         try:
-            frame = pd.read_csv(csv_path, encoding=encoding, sep=None, engine="python")
+            if max_columns is not None:
+                header = pd.read_csv(csv_path, encoding=encoding, sep=None, engine="python", nrows=0)
+                if header.columns.empty:
+                    raise DataLoadError(f"CSV has no columns: {csv_path}")
+                if header.shape[1] > max_columns:
+                    raise DataLoadError(f"CSV has too many columns: {header.shape[1]}. Limit is {max_columns}.")
+            frame = pd.read_csv(csv_path, encoding=encoding, sep=None, engine="python", nrows=nrows)
         except UnicodeDecodeError as exc:
             errors.append(f"{encoding}: {exc}")
             continue
@@ -40,6 +47,10 @@ def load_csv(path: str | Path) -> pd.DataFrame:
             raise DataLoadError(f"CSV has no columns: {csv_path}")
         if frame.empty:
             raise DataLoadError(f"CSV has columns but no data rows: {csv_path}")
+        if max_columns is not None and frame.shape[1] > max_columns:
+            raise DataLoadError(f"CSV has too many columns: {frame.shape[1]}. Limit is {max_columns}.")
+        if max_rows is not None and frame.shape[0] > max_rows:
+            raise DataLoadError(f"CSV has too many rows: {frame.shape[0]}. Limit is {max_rows}.")
         return frame
 
     joined = "; ".join(errors)

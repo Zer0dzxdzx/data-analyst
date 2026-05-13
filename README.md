@@ -16,7 +16,8 @@
 先安装一次依赖：
 
 ```bash
-python3 -m pip install -e .
+python3 -m pip install -r requirements.txt
+python3 -m pip install -e . --no-deps
 ```
 
 ## 最简单用法
@@ -56,30 +57,46 @@ ai-data-analyst-web
 仓库内已包含 `render.yaml`，可以在 Render 创建 Web Service 并连接 GitHub 仓库后自动部署。公网版本默认使用离线分析：
 
 - 上传上限：10MB
+- 行数上限：100000 行
+- 列数上限：100 列
+- 相关性矩阵：最多 30 个数值列
+- 限流：每 IP 每小时 20 次分析请求
 - 报告目录：`/tmp/ai-data-analyst-reports`
 - 临时保留：24 小时
 - LLM：默认关闭，不配置 `LLM_API_KEY`
+- 访问码：公网必须设置 `AI_ANALYST_ACCESS_CODE`；缺失时服务会 fail closed
 
 Render 启动命令：
 
 ```bash
-gunicorn 'ai_data_analyst.web:create_app()' --bind 0.0.0.0:$PORT --workers 1 --timeout 180
+gunicorn 'ai_data_analyst.web:create_app()' --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 120
 ```
 
 如果不使用 `render.yaml` 自动创建服务，请手动配置这些环境变量，保证公网行为一致：
 
 ```bash
+AI_ANALYST_SECRET_KEY=<生成一个长随机字符串>
+AI_ANALYST_REQUIRE_ACCESS_CODE=1
+AI_ANALYST_ACCESS_CODE=<发给试用者的共享访问码>
 AI_ANALYST_WEB_REPORTS_DIR=/tmp/ai-data-analyst-reports
 AI_ANALYST_MAX_UPLOAD_MB=10
+AI_ANALYST_RATE_LIMIT_PER_HOUR=20
+AI_ANALYST_ACCESS_ATTEMPT_LIMIT_PER_HOUR=10
+AI_ANALYST_MAX_ROWS=100000
+AI_ANALYST_MAX_COLUMNS=100
+AI_ANALYST_MAX_CORRELATION_COLUMNS=30
 AI_ANALYST_RETENTION_HOURS=24
 AI_ANALYST_WEB_ALLOW_LLM=0
 AI_ANALYST_TRUST_PROXY=1
+AI_ANALYST_SESSION_COOKIE_SECURE=1
 MPLBACKEND=Agg
 ```
 
 `AI_ANALYST_TRUST_PROXY=1` 只应在 Render 这类可信反向代理后开启，用于正确识别公网 HTTPS Origin。
+启用 `AI_ANALYST_TRUST_PROXY=1` 时，如果没有配置 `AI_ANALYST_ACCESS_CODE`，应用会默认 fail closed。
+当前限流是单实例内存限流，适合 Render 免费实例的小范围试用；多实例或长期公开服务应升级到 Redis/托管限流。
 
-部署后可用 `examples/dashboard_test_sales.csv` 在线验收，目标列填写 `revenue`。
+部署后可用 `examples/dashboard_test_sales.csv` 在线验收，目标列填写 `revenue`。报告下载链接包含临时 token，并带有 `no-store` 缓存头，仍然只建议发给可信试用者；原始 CSV 保存在 `_inputs/` 目录，不通过网页下载路由暴露。
 
 输出文件：
 
@@ -93,7 +110,8 @@ MPLBACKEND=Agg
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
+python -m pip install -r requirements.txt
+python -m pip install -e . --no-deps
 ```
 
 安装后也可以使用完整 CLI：
@@ -136,12 +154,14 @@ print(result.report_paths)
 
 ```bash
 PYTHONPATH=src python3 -m unittest discover -s tests
+python3 -m compileall -q src tests analyze.py
+python3 -m ruff check .
 ```
 
 如果安装了开发依赖，也可以使用：
 
 ```bash
-python3 -m pip install -e ".[dev]"
+python3 -m pip install -r requirements-dev.txt
+python3 -m pip install -e . --no-deps
 pytest
-python3 -m ruff check .
 ```
