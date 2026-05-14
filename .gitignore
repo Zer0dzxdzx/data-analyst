@@ -11,6 +11,7 @@ htmlcov/
 dist/
 build/
 reports/
+output/
 .cache/
 *.log
 .env

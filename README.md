@@ -1,5 +1,12 @@
 # AI 数据分析助手
 
+在线体验：https://data-analyst-shuu.onrender.com/
+
+GitHub：https://github.com/Zer0dzxdzx/data-analyst
+
+> Render 免费实例首次访问可能需要 20-60 秒冷启动。
+> 公网 Demo 仅用于试用，请勿上传包含隐私、商业机密或敏感信息的数据。
+
 基于 Python、Pandas 与 OpenAI-compatible LLM API 的自动化 CSV 数据分析原型。它可以自动读取 CSV、识别字段类型、生成 EDA 摘要和图表，并输出 Markdown/HTML 报告。
 
 ## 功能
