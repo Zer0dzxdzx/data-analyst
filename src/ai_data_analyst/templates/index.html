@@ -264,6 +264,40 @@
       background: var(--teal-soft);
       box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
     }
+    .sample-choice {
+      background:
+        linear-gradient(135deg, rgba(15, 118, 110, 0.12), transparent 48%),
+        #ffffff;
+    }
+    .sample-choice .input-heading {
+      align-items: flex-start;
+    }
+    .sample-details {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin: 12px 0 14px;
+    }
+    .sample-detail {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.74);
+      padding: 9px 10px;
+      min-width: 0;
+    }
+    .sample-detail strong {
+      display: block;
+      font-size: 14px;
+      line-height: 1.2;
+      overflow-wrap: anywhere;
+    }
+    .sample-detail span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .sample-action {
+      width: 100%;
+    }
     .row {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -584,6 +618,7 @@
       button, .button { width: 100%; }
       .download-row { display: grid; grid-template-columns: 1fr; }
       .quick-stats { grid-template-columns: 1fr; }
+      .sample-details { grid-template-columns: 1fr; }
       .workspace-title h2 { font-size: 21px; }
       .flow-line { grid-template-columns: 1fr; }
       .flow-count { text-align: left; }
@@ -670,12 +705,43 @@
             <div>
               <div class="eyebrow">Input</div>
               <h2>数据输入</h2>
-              <p class="muted">上传文件或粘贴 CSV，二选一。</p>
+              <p class="muted">上传文件、粘贴 CSV，或直接使用示例数据。</p>
             </div>
           </div>
 
           <form action="/analyze" method="post" enctype="multipart/form-data" id="analysis-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <div class="choice-box sample-choice" id="sample-choice">
+              <div class="input-heading">
+                <div>
+                  <label>{{ settings.sample_dataset.label }}</label>
+                  <p class="muted">没有 CSV 也可以先跑一遍完整分析流程。</p>
+                </div>
+                <span class="source-badge">内置样例</span>
+              </div>
+              <div class="sample-details" aria-label="示例数据概览">
+                <div class="sample-detail">
+                  <strong>{{ settings.sample_dataset.rows }}</strong>
+                  <span>订单行</span>
+                </div>
+                <div class="sample-detail">
+                  <strong>{{ settings.sample_dataset.columns }}</strong>
+                  <span>字段</span>
+                </div>
+                <div class="sample-detail">
+                  <strong>{{ settings.sample_dataset.target }}</strong>
+                  <span>默认目标列</span>
+                </div>
+              </div>
+              <button
+                class="sample-action"
+                type="submit"
+                name="sample_dataset"
+                value="{{ settings.sample_dataset.id }}"
+                formnovalidate
+              >一键体验示例分析</button>
+            </div>
+
             <div class="input-choice">
               <div class="choice-box" id="file-choice">
                 <div class="input-heading">
@@ -729,7 +795,7 @@
             </div>
 
             <div class="actions">
-              <button type="submit">开始分析</button>
+              <button id="submit-analysis" type="submit">开始分析</button>
               {% if settings.allow_llm %}
                 <span class="muted">默认不会请求外部 API。</span>
               {% else %}
@@ -744,6 +810,7 @@
         {% if result %}
           <div class="run-meta">
             <span class="pill">Run {{ result.run_id }}</span>
+            <span class="pill info">{{ result.source_label }}</span>
             <span class="pill positive">报告已生成</span>
           </div>
 
@@ -898,7 +965,8 @@
       const textInput = document.getElementById('csv_text');
       const fileChoice = document.getElementById('file-choice');
       const textChoice = document.getElementById('text-choice');
-      const submitButton = form.querySelector('button[type="submit"]');
+      const submitButton = document.getElementById('submit-analysis');
+      const sampleButtons = form.querySelectorAll('button[name="sample_dataset"]');
 
       function syncRequiredState() {
         const hasText = textInput.value.trim().length > 0;
@@ -918,11 +986,41 @@
         return !message;
       }
 
+      function setBusy(button, text) {
+        if (!button) {
+          return;
+        }
+        button.setAttribute('aria-busy', 'true');
+        button.textContent = text;
+      }
+
+      sampleButtons.forEach(function (button) {
+        button.addEventListener('click', function () {
+          fileInput.value = '';
+          textInput.value = '';
+          fileInput.required = false;
+          textInput.required = false;
+          fileInput.setCustomValidity('');
+          textInput.setCustomValidity('');
+          syncRequiredState();
+        });
+      });
+
       fileInput.addEventListener('change', syncRequiredState);
       textInput.addEventListener('input', syncRequiredState);
       fileInput.addEventListener('change', syncMutualExclusion);
       textInput.addEventListener('input', syncMutualExclusion);
       form.addEventListener('submit', function (event) {
+        const activeButton = event.submitter || submitButton;
+        const isSampleSubmit = activeButton && activeButton.name === 'sample_dataset';
+        if (isSampleSubmit) {
+          fileInput.required = false;
+          textInput.required = false;
+          fileInput.setCustomValidity('');
+          textInput.setCustomValidity('');
+          setBusy(activeButton, '正在生成示例报告...');
+          return;
+        }
         syncRequiredState();
         if (!syncMutualExclusion()) {
           event.preventDefault();
@@ -930,8 +1028,7 @@
           return;
         }
         if (form.checkValidity()) {
-          submitButton.setAttribute('aria-busy', 'true');
-          submitButton.textContent = '分析中，通常几十秒...';
+          setBusy(activeButton, '分析中，通常几十秒...');
         }
       });
       syncRequiredState();

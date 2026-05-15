@@ -35,6 +35,13 @@ DEFAULT_WEB_MAX_CORRELATION_COLUMNS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60 * 60
 ACCESS_SESSION_KEY = "ai_analyst_access_granted"
 ARTIFACT_TOKEN_FILE = ".artifact-token"
+SAMPLE_DATASET_ID = "sales"
+SAMPLE_DATASET_LABEL = "示例销售数据"
+SAMPLE_DATASET_TARGET = "revenue"
+SAMPLE_DATASET_FILENAME = "dashboard_test_sales.csv"
+SAMPLE_DATASET_PATH = PROJECT_ROOT / "examples" / SAMPLE_DATASET_FILENAME
+SAMPLE_DATASET_ROWS = 36
+SAMPLE_DATASET_COLUMNS = 15
 
 
 @dataclass(slots=True)
@@ -44,6 +51,7 @@ class AnalyzeForm:
     report_format: str
     max_categories: int
     csv_text: str
+    use_sample: bool
 
 
 def create_app() -> Flask:
@@ -150,29 +158,44 @@ def create_app() -> Flask:
             limit = app.config["WEB_MAX_UPLOAD_MB"]
             return _render_index(error=f"CSV 文本过大。最大 {limit}MB。"), 413
 
-        if form.csv_text and uploaded and uploaded.filename:
+        has_upload = bool(uploaded and uploaded.filename)
+        selected_sources = sum((bool(form.csv_text), has_upload, form.use_sample))
+        if form.csv_text and has_upload and not form.use_sample:
             return _render_index(error="Please provide either a CSV file or pasted CSV text, not both."), 400
 
-        if not form.csv_text and (not uploaded or not uploaded.filename):
-            return _render_index(error="Please choose a CSV file or paste CSV text."), 400
+        if selected_sources > 1:
+            return _render_index(error="请选择一种数据来源：示例数据、上传文件或粘贴 CSV。"), 400
+
+        if selected_sources == 0:
+            return _render_index(error="请选择上传文件、粘贴 CSV 或使用示例数据。"), 400
 
         run_id = uuid.uuid4().hex[:12]
         run_dir = _run_dir(app, run_id)
         input_dir = run_dir / "_inputs"
         input_dir.mkdir(parents=True, exist_ok=True)
+        source_label = "上传文件"
         if form.csv_text:
             csv_path = input_dir / "pasted.csv"
             csv_path.write_text(form.csv_text, encoding="utf-8")
+            source_label = "粘贴 CSV"
+        elif form.use_sample:
+            if not SAMPLE_DATASET_PATH.exists():
+                shutil.rmtree(run_dir, ignore_errors=True)
+                return _render_index(error="示例数据暂不可用，请上传 CSV 或稍后再试。"), 500
+            csv_path = input_dir / SAMPLE_DATASET_FILENAME
+            shutil.copyfile(SAMPLE_DATASET_PATH, csv_path)
+            source_label = SAMPLE_DATASET_LABEL
         else:
             csv_path = input_dir / _safe_filename(uploaded.filename or "")
             uploaded.save(csv_path)
+        target_column = SAMPLE_DATASET_TARGET if form.use_sample else form.target or None
 
         try:
             result = analyze_csv(
                 csv_path,
                 AnalysisConfig(
                     output_dir=run_dir,
-                    target_column=form.target or None,
+                    target_column=target_column,
                     max_categories=form.max_categories,
                     use_llm=form.use_llm,
                     report_format=form.report_format,
@@ -194,12 +217,12 @@ def create_app() -> Flask:
 
         artifact_token = token_urlsafe(18)
         _write_artifact_token(run_dir, artifact_token)
-        preview = _build_preview(app, run_id, result, artifact_token)
+        preview = _build_preview(app, run_id, result, artifact_token, source_label)
         return _render_index(
             result=preview,
             defaults={
                 **_defaults(),
-                "last_target": form.target,
+                "last_target": target_column or "",
                 "last_report_format": form.report_format,
                 "last_use_llm": form.use_llm,
             },
@@ -233,7 +256,7 @@ def main() -> int:
     return 0
 
 
-def _build_preview(app: Flask, run_id: str, result, artifact_token: str) -> dict[str, Any]:
+def _build_preview(app: Flask, run_id: str, result, artifact_token: str, source_label: str) -> dict[str, Any]:
     report_paths = {
         name: _artifact_url(app, run_id, artifact_token, result.output_dir, path)
         for name, path in result.report_paths.items()
@@ -254,6 +277,7 @@ def _build_preview(app: Flask, run_id: str, result, artifact_token: str) -> dict
     return {
         "run_id": run_id,
         "output_label": f"runs/{run_id}",
+        "source_label": source_label,
         "summary_url": summary_url,
         "report_urls": report_paths,
         "insights": result.insights,
@@ -293,6 +317,7 @@ def _parse_analyze_form(app: Flask) -> AnalyzeForm:
         report_format=_clean_text(request.form.get("report_format")) or "both",
         max_categories=web_max_categories(request.form.get("max_categories")),
         csv_text=_clean_text(request.form.get("csv_text")),
+        use_sample=request.form.get("sample_dataset") == SAMPLE_DATASET_ID,
     )
 
 
@@ -313,6 +338,13 @@ def _web_settings() -> dict[str, Any]:
         "rate_limit_per_hour": int(
             current_app.config.get("WEB_RATE_LIMIT_PER_HOUR", DEFAULT_WEB_RATE_LIMIT_PER_HOUR)
         ),
+        "sample_dataset": {
+            "id": SAMPLE_DATASET_ID,
+            "label": SAMPLE_DATASET_LABEL,
+            "target": SAMPLE_DATASET_TARGET,
+            "rows": SAMPLE_DATASET_ROWS,
+            "columns": SAMPLE_DATASET_COLUMNS,
+        },
     }
 
 
