@@ -105,7 +105,7 @@ def create_app() -> Flask:
     @app.after_request
     def add_security_headers(response):
         response.headers["Cache-Control"] = "private, no-store"
-        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
@@ -614,10 +614,10 @@ def _check_csrf() -> bool:
         return False
     if referer and not _same_origin(referer, host):
         return False
-    if not (origin or referer):
-        return False
     form_token = request.form.get("csrf_token", "")
     if not form_token:
+        return False
+    if not (origin or referer):
         return False
     session_token = session.get(CSRF_SESSION_KEY, "")
     if session_token and compare_digest(str(session_token), str(form_token)):

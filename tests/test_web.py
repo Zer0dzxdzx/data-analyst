@@ -202,7 +202,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("Invalid request origin or CSRF token.", response.get_data(as_text=True))
 
-    def test_signed_csrf_requires_same_origin_signal(self):
+    def test_signed_csrf_accepts_same_origin_referer_without_origin(self):
         app = create_app()
         issuing_client = app.test_client()
         stateless_client = app.test_client()
@@ -210,19 +210,36 @@ class WebAppTests(unittest.TestCase):
         csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', index_response.get_data(as_text=True))
         self.assertIsNotNone(csrf_match)
 
-        response = stateless_client.post(
-            "/analyze",
-            data={
-                "csrf_token": csrf_match.group(1),
-                "csv_text": "a,b\n1,2\n",
-                "report_format": "markdown",
-                "max_categories": "5",
-            },
-            content_type="multipart/form-data",
-        )
+        def fake_analyze_csv(csv_path, config):
+            output_dir = Path(csv_path).parent.parent
+            summary_path = output_dir / "summary.json"
+            summary_path.write_text("{}", encoding="utf-8")
+            report_path = output_dir / "report.md"
+            report_path.write_text("# report", encoding="utf-8")
+            return SimpleNamespace(
+                output_dir=output_dir,
+                summary_path=summary_path,
+                report_paths={"markdown": report_path},
+                charts=[],
+                insights={"mode": "fallback", "content": "ok"},
+                eda_summary={"shape": {"rows": 1, "columns": 2}},
+            )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Invalid request origin or CSRF token.", response.get_data(as_text=True))
+        with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
+            response = stateless_client.post(
+                "/analyze",
+                data={
+                    "csrf_token": csrf_match.group(1),
+                    "csv_text": "a,b\n1,2\n",
+                    "report_format": "markdown",
+                    "max_categories": "5",
+                },
+                headers={"Referer": "http://localhost/"},
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("分析结论", response.get_data(as_text=True))
 
     def test_session_csrf_requires_same_origin_signal(self):
         app = create_app()
@@ -590,7 +607,7 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("summary.json", body)
         self.assertNotIn(str(ROOT), body)
         self.assertIn("no-store", response.headers.get("Cache-Control", ""))
-        self.assertEqual(response.headers.get("Referrer-Policy"), "no-referrer")
+        self.assertEqual(response.headers.get("Referrer-Policy"), "same-origin")
 
     def test_demo_dataset_returns_result_page_without_csrf(self):
         app = create_app()
@@ -914,7 +931,7 @@ class WebAppTests(unittest.TestCase):
         with client.get(f"/runs/{run_id}/{token}/summary.json") as artifact_response:
             self.assertEqual(artifact_response.status_code, 200)
             self.assertIn("no-store", artifact_response.headers.get("Cache-Control", ""))
-            self.assertEqual(artifact_response.headers.get("Referrer-Policy"), "no-referrer")
+            self.assertEqual(artifact_response.headers.get("Referrer-Policy"), "same-origin")
         self.assertEqual(client.get(f"/runs/{run_id}/summary.json").status_code, 404)
         self.assertEqual(client.get(f"/runs/{run_id}/wrong-token/summary.json").status_code, 404)
         self.assertEqual(client.get(f"/runs/{run_id}/_inputs/pasted.csv").status_code, 404)
