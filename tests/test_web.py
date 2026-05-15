@@ -26,7 +26,7 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("AI 数据分析助手", response.get_data(as_text=True))
         self.assertIn('name="csrf_token"', response.get_data(as_text=True))
         self.assertIn('name="max_categories" type="number" min="1" max="50"', response.get_data(as_text=True))
-        self.assertIn('name="sample_dataset"', response.get_data(as_text=True))
+        self.assertIn('href="/demo"', response.get_data(as_text=True))
         self.assertIn("一键体验示例分析", response.get_data(as_text=True))
         self.assertIn("示例销售数据", response.get_data(as_text=True))
 
@@ -123,7 +123,6 @@ class WebAppTests(unittest.TestCase):
             "/analyze",
             data={
                 "csrf_token": csrf_match.group(1),
-                "sample_dataset": "sales",
                 "report_format": "markdown",
                 "max_categories": "5",
             },
@@ -145,7 +144,6 @@ class WebAppTests(unittest.TestCase):
             "/analyze",
             data={
                 "csrf_token": "token-null-origin",
-                "sample_dataset": "sales",
                 "report_format": "markdown",
                 "max_categories": "5",
             },
@@ -475,13 +473,10 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("no-store", response.headers.get("Cache-Control", ""))
         self.assertEqual(response.headers.get("Referrer-Policy"), "no-referrer")
 
-    def test_analyze_sample_dataset_returns_result_page(self):
+    def test_demo_dataset_returns_result_page_without_csrf(self):
         app = create_app()
         client = app.test_client()
         captured = {}
-
-        with client.session_transaction() as session:
-            session["ai_analyst_csrf"] = "token-sample"
 
         def fake_analyze_csv(csv_path, config):
             captured["path"] = Path(csv_path)
@@ -502,18 +497,7 @@ class WebAppTests(unittest.TestCase):
             )
 
         with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
-            response = client.post(
-                "/analyze",
-                data={
-                    "csrf_token": "token-sample",
-                    "sample_dataset": "sales",
-                    "target": "does_not_exist",
-                    "report_format": "markdown",
-                    "max_categories": "5",
-                },
-                headers={"Origin": "http://localhost"},
-                content_type="multipart/form-data",
-            )
+            response = client.get("/demo")
 
         body = response.get_data(as_text=True)
         self.assertEqual(response.status_code, 200)
@@ -524,6 +508,44 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("示例销售数据", body)
         self.assertIn("报告下载", body)
         self.assertNotIn(str(ROOT), body)
+
+    def test_demo_requires_access_code_when_enabled(self):
+        with patch.dict(os.environ, {"AI_ANALYST_ACCESS_CODE": "let-me-in"}):
+            app = create_app()
+        client = app.test_client()
+
+        response = client.get("/demo")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertIn("请输入访问码", response.get_data(as_text=True))
+
+    def test_demo_uses_analysis_rate_limit(self):
+        with patch.dict(os.environ, {"AI_ANALYST_RATE_LIMIT_PER_HOUR": "1"}):
+            app = create_app()
+        client = app.test_client()
+
+        def fake_analyze_csv(csv_path, config):
+            output_dir = Path(csv_path).parent.parent
+            summary_path = output_dir / "summary.json"
+            summary_path.write_text("{}", encoding="utf-8")
+            report_path = output_dir / "report.md"
+            report_path.write_text("# report", encoding="utf-8")
+            return SimpleNamespace(
+                output_dir=output_dir,
+                summary_path=summary_path,
+                report_paths={"markdown": report_path},
+                charts=[],
+                insights={"mode": "fallback", "content": "ok"},
+                eda_summary={"shape": {"rows": 36, "columns": 15}},
+            )
+
+        with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
+            first = client.get("/demo")
+            second = client.get("/demo")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+        self.assertIn("请求太频繁", second.get_data(as_text=True))
 
     def test_analyze_accepts_https_origin_behind_proxy(self):
         with patch.dict(os.environ, {"AI_ANALYST_TRUST_PROXY": "1", "AI_ANALYST_ACCESS_CODE": "let-me-in"}):
@@ -954,7 +976,7 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("either a CSV file or pasted CSV text", response.get_data(as_text=True))
 
-    def test_analyze_rejects_sample_combined_with_user_input(self):
+    def test_analyze_ignores_stale_sample_flag_and_rejects_missing_user_input(self):
         app = create_app()
         client = app.test_client()
 
@@ -966,7 +988,6 @@ class WebAppTests(unittest.TestCase):
             data={
                 "csrf_token": "token-sample-conflict",
                 "sample_dataset": "sales",
-                "csv_text": "a,b\n1,2\n",
                 "report_format": "markdown",
             },
             headers={"Origin": "http://localhost"},
@@ -974,29 +995,49 @@ class WebAppTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("请选择一种数据来源", response.get_data(as_text=True))
+        self.assertIn("一键体验示例分析", response.get_data(as_text=True))
 
-    def test_analyze_rejects_sample_combined_with_upload(self):
+    def test_analyze_treats_upload_as_user_input_when_stale_sample_flag_is_present(self):
         app = create_app()
         client = app.test_client()
+        captured = {}
 
         with client.session_transaction() as session:
             session["ai_analyst_csrf"] = "token-sample-upload-conflict"
 
-        response = client.post(
-            "/analyze",
-            data={
-                "csrf_token": "token-sample-upload-conflict",
-                "sample_dataset": "sales",
-                "csv_file": (BytesIO(b"a,b\n1,2\n"), "uploaded.csv"),
-                "report_format": "markdown",
-            },
-            headers={"Origin": "http://localhost"},
-            content_type="multipart/form-data",
-        )
+        def fake_analyze_csv(csv_path, config):
+            captured["path"] = Path(csv_path)
+            captured["target_column"] = config.target_column
+            output_dir = Path(csv_path).parent.parent
+            summary_path = output_dir / "summary.json"
+            summary_path.write_text("{}", encoding="utf-8")
+            report_path = output_dir / "report.md"
+            report_path.write_text("# report", encoding="utf-8")
+            return SimpleNamespace(
+                output_dir=output_dir,
+                summary_path=summary_path,
+                report_paths={"markdown": report_path},
+                charts=[],
+                insights={"mode": "fallback", "content": "ok"},
+                eda_summary={"shape": {"rows": 1, "columns": 2}},
+            )
 
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("请选择一种数据来源", response.get_data(as_text=True))
+        with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
+            response = client.post(
+                "/analyze",
+                data={
+                    "csrf_token": "token-sample-upload-conflict",
+                    "sample_dataset": "sales",
+                    "csv_file": (BytesIO(b"a,b\n1,2\n"), "uploaded.csv"),
+                    "report_format": "markdown",
+                },
+                headers={"Origin": "http://localhost"},
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(captured["path"].name, "uploaded.csv")
+        self.assertIsNone(captured["target_column"])
 
     def test_analyze_rejects_bad_origin(self):
         app = create_app()

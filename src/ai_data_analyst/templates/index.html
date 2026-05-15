@@ -345,7 +345,7 @@
       transform: translateY(-1px);
       text-decoration: none;
     }
-    button[aria-busy="true"] {
+    button[aria-busy="true"], .button[aria-busy="true"] {
       background: var(--teal-dark);
       cursor: wait;
     }
@@ -733,13 +733,7 @@
                   <span>默认目标列</span>
                 </div>
               </div>
-              <button
-                class="sample-action"
-                type="submit"
-                name="sample_dataset"
-                value="{{ settings.sample_dataset.id }}"
-                formnovalidate
-              >一键体验示例分析</button>
+              <a class="button sample-action" href="{{ url_for('demo') }}">一键体验示例分析</a>
             </div>
 
             <div class="input-choice">
@@ -966,7 +960,7 @@
       const fileChoice = document.getElementById('file-choice');
       const textChoice = document.getElementById('text-choice');
       const submitButton = document.getElementById('submit-analysis');
-      const sampleButtons = form.querySelectorAll('button[name="sample_dataset"]');
+      const sampleLinks = form.querySelectorAll('a.sample-action');
 
       function syncRequiredState() {
         const hasText = textInput.value.trim().length > 0;
@@ -994,15 +988,9 @@
         button.textContent = text;
       }
 
-      sampleButtons.forEach(function (button) {
-        button.addEventListener('click', function () {
-          fileInput.value = '';
-          textInput.value = '';
-          fileInput.required = false;
-          textInput.required = false;
-          fileInput.setCustomValidity('');
-          textInput.setCustomValidity('');
-          syncRequiredState();
+      sampleLinks.forEach(function (link) {
+        link.addEventListener('click', function () {
+          setBusy(link, '正在生成示例报告...');
         });
       });
 
@@ -1012,15 +1000,6 @@
       textInput.addEventListener('input', syncMutualExclusion);
       form.addEventListener('submit', function (event) {
         const activeButton = event.submitter || submitButton;
-        const isSampleSubmit = activeButton && activeButton.name === 'sample_dataset';
-        if (isSampleSubmit) {
-          fileInput.required = false;
-          textInput.required = false;
-          fileInput.setCustomValidity('');
-          textInput.setCustomValidity('');
-          setBusy(activeButton, '正在生成示例报告...');
-          return;
-        }
         syncRequiredState();
         if (!syncMutualExclusion()) {
           event.preventDefault();

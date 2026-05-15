@@ -35,7 +35,6 @@ DEFAULT_WEB_MAX_CORRELATION_COLUMNS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60 * 60
 ACCESS_SESSION_KEY = "ai_analyst_access_granted"
 ARTIFACT_TOKEN_FILE = ".artifact-token"
-SAMPLE_DATASET_ID = "sales"
 SAMPLE_DATASET_LABEL = "示例销售数据"
 SAMPLE_DATASET_TARGET = "revenue"
 SAMPLE_DATASET_FILENAME = "dashboard_test_sales.csv"
@@ -51,7 +50,6 @@ class AnalyzeForm:
     report_format: str
     max_categories: int
     csv_text: str
-    use_sample: bool
 
 
 def create_app() -> Flask:
@@ -159,15 +157,11 @@ def create_app() -> Flask:
             return _render_index(error=f"CSV 文本过大。最大 {limit}MB。"), 413
 
         has_upload = bool(uploaded and uploaded.filename)
-        selected_sources = sum((bool(form.csv_text), has_upload, form.use_sample))
-        if form.csv_text and has_upload and not form.use_sample:
+        if form.csv_text and has_upload:
             return _render_index(error="Please provide either a CSV file or pasted CSV text, not both."), 400
 
-        if selected_sources > 1:
-            return _render_index(error="请选择一种数据来源：示例数据、上传文件或粘贴 CSV。"), 400
-
-        if selected_sources == 0:
-            return _render_index(error="请选择上传文件、粘贴 CSV 或使用示例数据。"), 400
+        if not form.csv_text and not has_upload:
+            return _render_index(error="请选择上传文件、粘贴 CSV，或点击一键体验示例分析。"), 400
 
         run_id = uuid.uuid4().hex[:12]
         run_dir = _run_dir(app, run_id)
@@ -178,17 +172,10 @@ def create_app() -> Flask:
             csv_path = input_dir / "pasted.csv"
             csv_path.write_text(form.csv_text, encoding="utf-8")
             source_label = "粘贴 CSV"
-        elif form.use_sample:
-            if not SAMPLE_DATASET_PATH.exists():
-                shutil.rmtree(run_dir, ignore_errors=True)
-                return _render_index(error="示例数据暂不可用，请上传 CSV 或稍后再试。"), 500
-            csv_path = input_dir / SAMPLE_DATASET_FILENAME
-            shutil.copyfile(SAMPLE_DATASET_PATH, csv_path)
-            source_label = SAMPLE_DATASET_LABEL
         else:
             csv_path = input_dir / _safe_filename(uploaded.filename or "")
             uploaded.save(csv_path)
-        target_column = SAMPLE_DATASET_TARGET if form.use_sample else form.target or None
+        target_column = form.target or None
 
         try:
             result = analyze_csv(
@@ -228,6 +215,16 @@ def create_app() -> Flask:
             },
         )
 
+    @app.get("/demo")
+    def demo() -> str:
+        if _access_misconfigured(app):
+            return _render_index(error=_access_configuration_error()), 503
+        if not _has_access(app):
+            return _render_index(error="请输入访问码后再查看示例分析。"), 403
+        if not _check_rate_limit(app, bucket="analysis", limit_config="WEB_RATE_LIMIT_PER_HOUR"):
+            return _render_index(error="请求太频繁，请稍后再试。"), 429
+        return _run_sample_analysis(app)
+
     @app.get("/runs/<run_id>/<token>/<path:filename>")
     def artifact(run_id: str, token: str, filename: str) -> Any:
         if _access_misconfigured(app):
@@ -246,6 +243,56 @@ def create_app() -> Flask:
         abort(404)
 
     return app
+
+
+def _run_sample_analysis(app: Flask) -> str:
+    if not SAMPLE_DATASET_PATH.exists():
+        return _render_index(error="示例数据暂不可用，请上传 CSV 或稍后再试。"), 500
+
+    run_id = uuid.uuid4().hex[:12]
+    run_dir = _run_dir(app, run_id)
+    input_dir = run_dir / "_inputs"
+    input_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = input_dir / SAMPLE_DATASET_FILENAME
+    shutil.copyfile(SAMPLE_DATASET_PATH, csv_path)
+
+    try:
+        result = analyze_csv(
+            csv_path,
+            AnalysisConfig(
+                output_dir=run_dir,
+                target_column=SAMPLE_DATASET_TARGET,
+                max_categories=WEB_DEFAULT_CATEGORIES,
+                use_llm=False,
+                report_format="both",
+                max_rows=app.config["WEB_MAX_ROWS"],
+                max_columns=app.config["WEB_MAX_COLUMNS"],
+                max_correlation_columns=app.config["WEB_MAX_CORRELATION_COLUMNS"],
+            ),
+        )
+    except AnalysisError as exc:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        return _analysis_error_response(exc)
+    except ValueError as exc:
+        shutil.rmtree(run_dir, ignore_errors=True)
+        return _analysis_error_response(exc)
+    except Exception:
+        app.logger.exception("Unexpected sample analysis failure for run %s", run_id)
+        shutil.rmtree(run_dir, ignore_errors=True)
+        return _render_index(error="示例分析失败。请稍后再试，或改用上传 CSV。"), 500
+
+    artifact_token = token_urlsafe(18)
+    _write_artifact_token(run_dir, artifact_token)
+    preview = _build_preview(app, run_id, result, artifact_token, SAMPLE_DATASET_LABEL)
+    return _render_index(
+        result=preview,
+        defaults={
+            **_defaults(),
+            "last_target": SAMPLE_DATASET_TARGET,
+            "last_report_format": "both",
+            "last_use_llm": False,
+        },
+    )
 
 
 def main() -> int:
@@ -317,7 +364,6 @@ def _parse_analyze_form(app: Flask) -> AnalyzeForm:
         report_format=_clean_text(request.form.get("report_format")) or "both",
         max_categories=web_max_categories(request.form.get("max_categories")),
         csv_text=_clean_text(request.form.get("csv_text")),
-        use_sample=request.form.get("sample_dataset") == SAMPLE_DATASET_ID,
     )
 
 
@@ -339,7 +385,6 @@ def _web_settings() -> dict[str, Any]:
             current_app.config.get("WEB_RATE_LIMIT_PER_HOUR", DEFAULT_WEB_RATE_LIMIT_PER_HOUR)
         ),
         "sample_dataset": {
-            "id": SAMPLE_DATASET_ID,
             "label": SAMPLE_DATASET_LABEL,
             "target": SAMPLE_DATASET_TARGET,
             "rows": SAMPLE_DATASET_ROWS,
