@@ -57,7 +57,7 @@ ai-data-analyst-web
 ```
 
 打开浏览器访问 `http://127.0.0.1:8000`，上传 CSV 就能分析。
-网页会在本地会话里保存一个简单的 CSRF token，并默认只接受本机来源请求。
+网页会生成短期签名 CSRF token，并默认只接受同源请求；即使浏览器偶发丢失会话 cookie，上传流程也能正常完成。
 如果只是想快速体验功能，可以直接点击页面里的“一键体验示例分析”，系统会使用内置销售样例数据生成完整报告。
 
 ## 部署到 Render
@@ -99,7 +99,7 @@ AI_ANALYST_SESSION_COOKIE_SECURE=1
 MPLBACKEND=Agg
 ```
 
-`AI_ANALYST_TRUST_PROXY=1` 只应在 Render 这类可信反向代理后开启，用于正确识别公网 HTTPS Origin。
+`AI_ANALYST_TRUST_PROXY=1` 只应在 Render 这类可信反向代理后开启，用于正确识别公网 HTTPS Origin；代理公网模式必须配置稳定的 `AI_ANALYST_SECRET_KEY`，否则健康检查会 fail closed，避免多实例或重启后 CSRF token 间歇失效。
 如果希望用访问码保护公网入口，请设置 `AI_ANALYST_REQUIRE_ACCESS_CODE=1` 和 `AI_ANALYST_ACCESS_CODE=<访问码>`。
 当前限流是单实例内存限流，适合 Render 免费实例的小范围试用；多实例或长期公开服务应升级到 Redis/托管限流。
 

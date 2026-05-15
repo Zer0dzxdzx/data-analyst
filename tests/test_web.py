@@ -74,6 +74,35 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("服务未配置访问码", response.get_data(as_text=True))
 
+    def test_proxy_mode_without_stable_secret_fails_closed(self):
+        with patch.dict(
+            os.environ,
+            {
+                "AI_ANALYST_TRUST_PROXY": "1",
+                "AI_ANALYST_REQUIRE_ACCESS_CODE": "0",
+                "AI_ANALYST_ACCESS_CODE": "",
+                "AI_ANALYST_SECRET_KEY": "",
+            },
+            clear=False,
+        ):
+            app = create_app()
+        client = app.test_client()
+
+        response = client.get(
+            "/",
+            headers={
+                "Host": "data-analyst.onrender.com",
+                "X-Forwarded-Proto": "https",
+                "X-Forwarded-Host": "data-analyst.onrender.com",
+            },
+        )
+        health = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 503)
+        self.assertIn("服务未配置稳定密钥", response.get_data(as_text=True))
+        self.assertEqual(health.status_code, 503)
+        self.assertEqual(health.get_json(), {"status": "misconfigured"})
+
     def test_access_code_unlock_allows_index(self):
         with patch.dict(os.environ, {"AI_ANALYST_ACCESS_CODE": "let-me-in"}):
             app = create_app()
@@ -111,7 +140,69 @@ class WebAppTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("请输入访问码", response.get_data(as_text=True))
 
-    def test_public_analyze_rejects_csrf_without_session_cookie(self):
+    def test_public_analyze_accepts_signed_csrf_without_session_cookie(self):
+        app = create_app()
+        issuing_client = app.test_client()
+        stateless_client = app.test_client()
+        index_response = issuing_client.get("/")
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', index_response.get_data(as_text=True))
+        self.assertIsNotNone(csrf_match)
+
+        def fake_analyze_csv(csv_path, config):
+            output_dir = Path(csv_path).parent.parent
+            summary_path = output_dir / "summary.json"
+            summary_path.write_text("{}", encoding="utf-8")
+            report_path = output_dir / "report.md"
+            report_path.write_text("# report", encoding="utf-8")
+            return SimpleNamespace(
+                output_dir=output_dir,
+                summary_path=summary_path,
+                report_paths={"markdown": report_path},
+                charts=[],
+                insights={"mode": "fallback", "content": "ok"},
+                eda_summary={"shape": {"rows": 1, "columns": 2}},
+            )
+
+        with patch("ai_data_analyst.web.analyze_csv", side_effect=fake_analyze_csv):
+            response = stateless_client.post(
+                "/analyze",
+                data={
+                    "csrf_token": csrf_match.group(1),
+                    "csv_text": "a,b\n1,2\n",
+                    "report_format": "markdown",
+                    "max_categories": "5",
+                },
+                headers={"Origin": "http://localhost"},
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("分析结论", response.get_data(as_text=True))
+
+    def test_signed_csrf_rejects_different_client_fingerprint(self):
+        app = create_app()
+        issuing_client = app.test_client()
+        stateless_client = app.test_client()
+        index_response = issuing_client.get("/", headers={"User-Agent": "Browser A"})
+        csrf_match = re.search(r'name="csrf_token" value="([^"]+)"', index_response.get_data(as_text=True))
+        self.assertIsNotNone(csrf_match)
+
+        response = stateless_client.post(
+            "/analyze",
+            data={
+                "csrf_token": csrf_match.group(1),
+                "csv_text": "a,b\n1,2\n",
+                "report_format": "markdown",
+                "max_categories": "5",
+            },
+            headers={"Origin": "http://localhost", "User-Agent": "Browser B"},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid request origin or CSRF token.", response.get_data(as_text=True))
+
+    def test_signed_csrf_requires_same_origin_signal(self):
         app = create_app()
         issuing_client = app.test_client()
         stateless_client = app.test_client()
@@ -123,10 +214,31 @@ class WebAppTests(unittest.TestCase):
             "/analyze",
             data={
                 "csrf_token": csrf_match.group(1),
+                "csv_text": "a,b\n1,2\n",
                 "report_format": "markdown",
                 "max_categories": "5",
             },
-            headers={"Origin": "http://localhost"},
+            content_type="multipart/form-data",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid request origin or CSRF token.", response.get_data(as_text=True))
+
+    def test_session_csrf_requires_same_origin_signal(self):
+        app = create_app()
+        client = app.test_client()
+
+        with client.session_transaction() as session:
+            session["ai_analyst_csrf"] = "token-session-no-origin"
+
+        response = client.post(
+            "/analyze",
+            data={
+                "csrf_token": "token-session-no-origin",
+                "csv_text": "a,b\n1,2\n",
+                "report_format": "markdown",
+                "max_categories": "5",
+            },
             content_type="multipart/form-data",
         )
 
@@ -423,7 +535,14 @@ class WebAppTests(unittest.TestCase):
         self.assertFalse(app.config["WEB_ALLOW_LLM"])
 
     def test_proxy_mode_uses_forwarded_for_and_secure_cookie(self):
-        with patch.dict(os.environ, {"AI_ANALYST_TRUST_PROXY": "1", "AI_ANALYST_ACCESS_CODE": "let-me-in"}):
+        with patch.dict(
+            os.environ,
+            {
+                "AI_ANALYST_TRUST_PROXY": "1",
+                "AI_ANALYST_ACCESS_CODE": "let-me-in",
+                "AI_ANALYST_SECRET_KEY": "stable-test-secret",
+            },
+        ):
             app = create_app()
         client = app.test_client()
 
@@ -548,7 +667,14 @@ class WebAppTests(unittest.TestCase):
         self.assertIn("请求太频繁", second.get_data(as_text=True))
 
     def test_analyze_accepts_https_origin_behind_proxy(self):
-        with patch.dict(os.environ, {"AI_ANALYST_TRUST_PROXY": "1", "AI_ANALYST_ACCESS_CODE": "let-me-in"}):
+        with patch.dict(
+            os.environ,
+            {
+                "AI_ANALYST_TRUST_PROXY": "1",
+                "AI_ANALYST_ACCESS_CODE": "let-me-in",
+                "AI_ANALYST_SECRET_KEY": "stable-test-secret",
+            },
+        ):
             app = create_app()
         client = app.test_client()
         captured = {}

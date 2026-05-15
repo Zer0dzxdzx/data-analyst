@@ -7,12 +7,14 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path, PurePosixPath
 from secrets import compare_digest, token_urlsafe
 from typing import Any
 from urllib.parse import urlsplit
 
-from flask import Flask, abort, redirect, render_template, request, send_from_directory, session, url_for
+from flask import Flask, abort, current_app, redirect, render_template, request, send_from_directory, session, url_for
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
@@ -34,6 +36,9 @@ DEFAULT_WEB_MAX_COLUMNS = 100
 DEFAULT_WEB_MAX_CORRELATION_COLUMNS = 30
 RATE_LIMIT_WINDOW_SECONDS = 60 * 60
 ACCESS_SESSION_KEY = "ai_analyst_access_granted"
+CSRF_SESSION_KEY = "ai_analyst_csrf"
+CSRF_SIGNING_SALT = "ai-data-analyst-csrf"
+CSRF_TOKEN_MAX_AGE_SECONDS = 6 * 60 * 60
 ARTIFACT_TOKEN_FILE = ".artifact-token"
 SAMPLE_DATASET_LABEL = "示例销售数据"
 SAMPLE_DATASET_TARGET = "revenue"
@@ -60,7 +65,9 @@ def create_app() -> Flask:
     max_upload_mb = _env_int("AI_ANALYST_MAX_UPLOAD_MB", DEFAULT_WEB_MAX_UPLOAD_MB, minimum=1)
     retention_hours = _env_int("AI_ANALYST_RETENTION_HOURS", DEFAULT_WEB_RETENTION_HOURS, minimum=0)
     app.config["MAX_CONTENT_LENGTH"] = max_upload_mb * 1024 * 1024
-    app.config["SECRET_KEY"] = os.getenv("AI_ANALYST_SECRET_KEY") or token_urlsafe(32)
+    configured_secret_key = os.getenv("AI_ANALYST_SECRET_KEY", "").strip()
+    app.config["SECRET_KEY"] = configured_secret_key or token_urlsafe(32)
+    app.config["WEB_SECRET_KEY_EPHEMERAL"] = not configured_secret_key
     app.config["WEB_REPORTS_DIR"] = Path(
         os.getenv("AI_ANALYST_WEB_REPORTS_DIR", PROJECT_ROOT / "reports" / "web")
     ).expanduser().resolve()
@@ -69,6 +76,7 @@ def create_app() -> Flask:
     app.config["WEB_ALLOW_LLM"] = _env_bool("AI_ANALYST_WEB_ALLOW_LLM", default=False)
     app.config["WEB_ACCESS_CODE"] = os.getenv("AI_ANALYST_ACCESS_CODE", "").strip()
     trust_proxy = _env_bool("AI_ANALYST_TRUST_PROXY", default=False)
+    app.config["WEB_TRUST_PROXY"] = trust_proxy
     app.config["WEB_REQUIRE_ACCESS_CODE"] = _env_bool("AI_ANALYST_REQUIRE_ACCESS_CODE", default=trust_proxy)
     app.config["WEB_RATE_LIMIT_PER_HOUR"] = _env_int(
         "AI_ANALYST_RATE_LIMIT_PER_HOUR",
@@ -109,7 +117,7 @@ def create_app() -> Flask:
 
     @app.get("/healthz")
     def healthz():
-        if _access_misconfigured(app):
+        if _service_misconfigured(app):
             return {"status": "misconfigured"}, 503
         return {"status": "ok"}
 
@@ -120,14 +128,14 @@ def create_app() -> Flask:
 
     @app.get("/")
     def index():
-        if _access_misconfigured(app):
-            return _render_index(error=_access_configuration_error()), 503
+        if _service_misconfigured(app):
+            return _render_index(error=_service_configuration_error(app)), 503
         return _render_index()
 
     @app.post("/")
     def unlock_access():
-        if _access_misconfigured(app):
-            return _render_index(error=_access_configuration_error()), 503
+        if _service_misconfigured(app):
+            return _render_index(error=_service_configuration_error(app)), 503
         if not _access_required(app):
             return redirect(url_for("index"))
         if not _check_csrf():
@@ -143,8 +151,8 @@ def create_app() -> Flask:
     def analyze() -> str:
         if not _check_csrf():
             return _render_index(error="Invalid request origin or CSRF token."), 400
-        if _access_misconfigured(app):
-            return _render_index(error=_access_configuration_error()), 503
+        if _service_misconfigured(app):
+            return _render_index(error=_service_configuration_error(app)), 503
         if not _has_access(app):
             return _render_index(error="请输入访问码后再上传分析。"), 403
         if not _check_rate_limit(app, bucket="analysis", limit_config="WEB_RATE_LIMIT_PER_HOUR"):
@@ -217,8 +225,8 @@ def create_app() -> Flask:
 
     @app.get("/demo")
     def demo() -> str:
-        if _access_misconfigured(app):
-            return _render_index(error=_access_configuration_error()), 503
+        if _service_misconfigured(app):
+            return _render_index(error=_service_configuration_error(app)), 503
         if not _has_access(app):
             return _render_index(error="请输入访问码后再查看示例分析。"), 403
         if not _check_rate_limit(app, bucket="analysis", limit_config="WEB_RATE_LIMIT_PER_HOUR"):
@@ -227,7 +235,7 @@ def create_app() -> Flask:
 
     @app.get("/runs/<run_id>/<token>/<path:filename>")
     def artifact(run_id: str, token: str, filename: str) -> Any:
-        if _access_misconfigured(app):
+        if _service_misconfigured(app):
             abort(404)
         if not _has_access(app):
             abort(404)
@@ -537,8 +545,18 @@ def _access_misconfigured(app: Flask) -> bool:
     return bool(app.config.get("WEB_REQUIRE_ACCESS_CODE")) and not str(app.config.get("WEB_ACCESS_CODE", "")).strip()
 
 
-def _access_configuration_error() -> str:
-    return "服务未配置访问码。请设置 AI_ANALYST_ACCESS_CODE 后再开放公网访问。"
+def _secret_key_misconfigured(app: Flask) -> bool:
+    return bool(app.config.get("WEB_TRUST_PROXY")) and bool(app.config.get("WEB_SECRET_KEY_EPHEMERAL"))
+
+
+def _service_misconfigured(app: Flask) -> bool:
+    return _access_misconfigured(app) or _secret_key_misconfigured(app)
+
+
+def _service_configuration_error(app: Flask) -> str:
+    if _access_misconfigured(app):
+        return "服务未配置访问码。请设置 AI_ANALYST_ACCESS_CODE 后再开放公网访问。"
+    return "服务未配置稳定密钥。请设置 AI_ANALYST_SECRET_KEY 后再开放公网访问。"
 
 
 def _has_access(app: Flask) -> bool:
@@ -581,11 +599,11 @@ def _client_key() -> str:
 
 
 def _csrf_token() -> str:
-    token = session.get("ai_analyst_csrf")
+    token = session.get(CSRF_SESSION_KEY)
     if not token:
         token = token_urlsafe(24)
-        session["ai_analyst_csrf"] = token
-    return token
+        session[CSRF_SESSION_KEY] = token
+    return _signed_csrf_token()
 
 
 def _check_csrf() -> bool:
@@ -596,11 +614,45 @@ def _check_csrf() -> bool:
         return False
     if referer and not _same_origin(referer, host):
         return False
-    form_token = request.form.get("csrf_token", "")
-    session_token = session.get("ai_analyst_csrf", "")
-    if not session_token or not form_token:
+    if not (origin or referer):
         return False
-    return compare_digest(str(session_token), str(form_token))
+    form_token = request.form.get("csrf_token", "")
+    if not form_token:
+        return False
+    session_token = session.get(CSRF_SESSION_KEY, "")
+    if session_token and compare_digest(str(session_token), str(form_token)):
+        return True
+    return _signed_csrf_token_matches(str(form_token))
+
+
+def _signed_csrf_token() -> str:
+    payload = {
+        "nonce": token_urlsafe(16),
+        "client": _csrf_client_fingerprint(),
+        "v": 1,
+    }
+    return URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt=CSRF_SIGNING_SALT).dumps(payload)
+
+
+def _signed_csrf_token_matches(token: str) -> bool:
+    try:
+        payload = URLSafeTimedSerializer(current_app.config["SECRET_KEY"], salt=CSRF_SIGNING_SALT).loads(
+            token,
+            max_age=CSRF_TOKEN_MAX_AGE_SECONDS,
+        )
+    except (BadSignature, SignatureExpired, TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("v") != 1:
+        return False
+    submitted_fingerprint = str(payload.get("client", ""))
+    return bool(submitted_fingerprint) and compare_digest(submitted_fingerprint, _csrf_client_fingerprint())
+
+
+def _csrf_client_fingerprint() -> str:
+    user_agent = request.headers.get("User-Agent", "")
+    return sha256(user_agent.encode("utf-8")).hexdigest()[:32]
 
 
 def _same_origin(candidate: str, expected: str) -> bool:
